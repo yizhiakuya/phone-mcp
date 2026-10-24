@@ -24,6 +24,7 @@ from pydantic import Field
 
 from .bridge import BridgeError, BridgeClient, HumanOverrideError, MoneyBlockedError
 from .config import Config, ConfigError, load_config
+from .recorder import PATH_TO_TOOL, Recorder, RecorderError, default_dir
 from .render import render_tree
 
 # 用户中断时返回给模型的固定信号。模型看到它就应当停止本轮操作。
@@ -665,6 +666,9 @@ async def _action(path: str, body: dict[str, Any]) -> str:
 
     用户接管手机时**不重试、不等待**——直接返回明确的信号，让模型知道
     "人正在操作，本轮该停手了"。是否继续由模型自己判断。
+
+    成功的动作会自动进录制缓冲（如果正在录制）。失败的不录——
+    录下来一串含失败步骤的流程没有回放价值。
     """
     client = await _get_client()
     try:
@@ -685,12 +689,174 @@ async def _action(path: str, body: dict[str, Any]) -> str:
         # 不说清楚，模型会以为做成了继续往下走。
         if result.get("no_effect"):
             line += (
-                "\n⚠ 界面没有任何变化。可能点在了空白处、目标被遮挡，或页面本来就不响应。"
+                "\n⚠ 界面没有任何变化。可能点在了空白处、目标被遮挡，或页面本身不响应。"
                 "请重新 phone_observe 确认当前界面，别假设这一步成功了。"
             )
         if result.get("warning"):
             line += f"\n⚠ {result['warning']}"
         if result.get("hit"):
             line += f"\n落点上的控件：「{result['hit']}」"
+        # 只有真的生效才录进流程。no_effect 说明这一步没做成，
+        # 录进去会在回放时重演一个已知无效的动作。
+        tool = PATH_TO_TOOL.get(path)
+        if tool and not result.get("no_effect"):
+            _recorder().append(tool, body, target=target)
         return line
     return f"失败：{result.get('error', '未知原因')}"
+
+
+# ---------------------------------------------------------------- 录制
+
+
+_recorder_instance: Recorder | None = None
+
+
+def _recorder() -> Recorder:
+    global _recorder_instance
+    if _recorder_instance is None:
+        _recorder_instance = Recorder(default_dir())
+    return _recorder_instance
+
+
+@server.tool(
+    name="phone_record",
+    description=(
+        "录制一段操作流程，之后可用 phone_replay 一键重放。\n"
+        "用法：phone_record(name=\"发消息\", action=\"start\") → 正常操作手机 → "
+        "phone_record(name=\"发消息\", action=\"stop\")。\n"
+        "只录动作类工具（点击/输入/滑动/按键/等待），不录读取类。\n"
+        "**失败或没生效的步骤不会被录进去**。"
+    ),
+)
+async def phone_record(
+    name: Annotated[str, Field(description="录制名，用作文件名")],
+    action: Annotated[str, Field(description="start / stop / cancel / list / delete")] = "start",
+    overwrite: Annotated[bool, Field(description="start 时覆盖同名录制")] = False,
+) -> str:
+    rec = _recorder()
+    try:
+        if action == "start":
+            r = rec.start(name, overwrite=overwrite)
+            return f"开始录制「{r.name}」。现在正常操作手机，完成后调用 action=stop。"
+        if action == "stop":
+            r = rec.stop()
+            if not r.steps:
+                return "录制结束，但没有录到任何动作（只有读取类操作不算）。未保存。"
+            return (
+                f"已保存「{r.name}」，共 {len(r.steps)} 步：\n"
+                + "\n".join(
+                    f"  {i + 1}. {s.step or s.tool}" for i, s in enumerate(r.steps)
+                )
+            )
+        if action == "cancel":
+            rec.cancel()
+            return "已放弃当前录制，未保存。"
+        if action == "list":
+            items = rec.list()
+            if not items:
+                return "还没有任何录制。"
+            lines = [f"共 {len(items)} 个录制："]
+            for it in items:
+                lines.append(f"  {it['name']}  {it['steps']} 步")
+            return "\n".join(lines)
+        if action == "delete":
+            rec.delete(name)
+            return f"已删除「{name}」。"
+        return f"未知 action：{action}（可用 start / stop / cancel / list / delete）"
+    except RecorderError as exc:
+        return f"录制错误：{exc}"
+
+
+@server.tool(
+    name="phone_replay",
+    description=(
+        "重放一段录好的流程。\n"
+        "**任何一步失败就停**——不会带着错位的界面继续往下点。\n"
+        "停止后把当前界面交回给你判断（失败的那步之前都执行了）。\n"
+        "适合重复性任务；界面改版后大概率会在某一步停下，需要重新录制。"
+    ),
+)
+async def phone_replay(
+    name: Annotated[str, Field(description="录制名")],
+    stop_on_warning: Annotated[
+        bool, Field(description="手势成功但界面没变化时是否也算失败停下")
+    ] = True,
+) -> str:
+    rec = _recorder()
+    try:
+        recording = rec.load(name)
+    except RecorderError as exc:
+        return f"录制错误：{exc}"
+
+    if not recording.steps:
+        return f"录制「{name}」里没有步骤。"
+
+    done: list[str] = []
+    # 回放期间暂停录制，避免把重放动作又录进另一个流程
+    with rec.suspended():
+        for i, step in enumerate(recording.steps, start=1):
+            label = step.step or step.tool
+            args = dict(step.args)
+            # node_id 是快照内的临时编号，回放时必然失效；
+            # 换成录制时解析出的文本/描述/资源 id 重新定位。
+            if "node_id" in args and step.fallback:
+                args.pop("node_id", None)
+                args.update(step.fallback)
+            out = await _replay_one(step.tool, args)
+            if out is None:
+                return _replay_failed(name, i, label, "工具不存在或参数无效", done)
+            text, failed = out
+            if failed:
+                return _replay_failed(name, i, label, text, done)
+            if stop_on_warning and ("⚠" in text):
+                return _replay_failed(name, i, label, text, done)
+            done.append(label)
+
+    return (
+        f"重放「{name}」完成，{len(recording.steps)} 步全部成功：\n"
+        + "\n".join(f"  {i + 1}. {d}" for i, d in enumerate(done))
+    )
+
+
+async def _replay_one(tool: str, args: dict[str, Any]) -> tuple[str, bool] | None:
+    """执行一步，返回 (输出文本, 是否算失败)。"""
+    fn = {
+        "phone_launch": phone_launch,
+        "phone_click": phone_click,
+        "phone_long_click": phone_long_click,
+        "phone_tap": phone_tap,
+        "phone_swipe": phone_swipe,
+        "phone_scroll": phone_scroll,
+        "phone_set_text": phone_set_text,
+        "phone_key": phone_key,
+        "phone_wait": phone_wait,
+        "phone_wait_until": phone_wait_until,
+    }.get(tool)
+    if fn is None:
+        return None
+    try:
+        text = await fn(**args)
+    except ToolError:
+        # 用户中断 / 资金拦截：直接往上抛，回放必须立刻停
+        raise
+    except TypeError as exc:
+        return f"参数不匹配：{exc}", True
+    except Exception as exc:  # noqa: BLE001
+        return f"执行出错：{exc}", True
+    failed = text.startswith("失败") or "超时" in text or "没有匹配" in text
+    return text, failed
+
+
+def _replay_failed(
+    name: str, index: int, label: str, reason: str, done: list[str]
+) -> str:
+    tail = (
+        f"\n\n第 {index} 步「{label}」失败：{reason}\n"
+        f"已执行 {len(done)} 步，后续步骤没有执行。\n"
+        "请 phone_observe 看当前界面，判断是界面变了还是这一步需要调整。"
+    )
+    if done:
+        tail += "\n\n已完成的步骤：\n" + "\n".join(
+            f"  {i + 1}. {d}" for i, d in enumerate(done)
+        )
+    return f"重放「{name}」中止。" + tail

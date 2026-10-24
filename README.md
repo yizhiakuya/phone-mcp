@@ -6,7 +6,7 @@
 手机主动外连中继，因此在 4G、异地网络下同样可用，不需要端口映射。
 
 **文档**
-[架构设计](docs/architecture.md) · [线程模型](docs/threading.md) · [部署与运维](docs/operations.md) · [安全模型](docs/security.md) · [验收记录](docs/security-validation.md)
+[架构设计](docs/architecture.md) · [线程模型](docs/threading.md) · [部署与运维](docs/operations.md) · [安全模型](docs/security.md) · [验收记录](docs/security-validation.md) · [踩坑记录](docs/lessons.md)
 
 ---
 
@@ -116,6 +116,7 @@ python -m phone_mcp.pairing \
 | `phone_wait_until` | 等待某段文本出现或消失，语义条件更准 |
 | `phone_watch` | 阻塞等待无障碍事件（通知、界面切换等），监听而非轮询 |
 | `phone_apps` / `phone_launch` | 列出并启动应用 |
+| `phone_record` / `phone_replay` | 录制操作流程并一键重放，失败即停 |
 | `phone_status` | 连接与服务状态 |
 
 所有工具接受可选的 `step` 参数（一句中文短语），用于在手机状态条上显示当前进度。

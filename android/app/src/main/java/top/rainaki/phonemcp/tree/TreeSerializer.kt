@@ -28,6 +28,20 @@ class TreeSerializer(
     private val refs = LinkedHashMap<String, NodeRef>()
     private val root = JSONObject()
 
+    companion object {
+        /**
+         * 全局单调递增的节点编号。
+         *
+         * **不能用快照内的序号**：每次 dump 都从 n0 重新编号的话，模型上一次
+         * 拿到的 n37 和这一次的 n37 是完全不同的节点。SnapshotStore 保留 4 个
+         * 版本，但 id 字符串一旦重复，查询时只能命中最新版本——旧 id 会静默
+         * 解析成另一个控件，点错地方。（实测：n37 从「哔哩哔哩」变成了「高德地图」。）
+         *
+         * 用全局计数保证 id 跨快照唯一，旧 id 才能正确回溯到它原本指向的节点。
+         */
+        private val NODE_SEQ = java.util.concurrent.atomic.AtomicLong(0)
+    }
+
     fun serialize(
         rootNode: AccessibilityNodeInfo,
         screen: Rect,
@@ -61,7 +75,7 @@ class TreeSerializer(
         val visible = node.isVisibleToUser
         if (!includeInvisible && !visible && !isRoot) return 0
 
-        val id = "n${refs.size}"
+        val id = "n${NODE_SEQ.incrementAndGet()}"
         val text = if (node.isPassword) null else node.text?.toString()?.takeIf { it.isNotEmpty() }
         val desc = if (node.isPassword) null else node.contentDescription?.toString()?.takeIf { it.isNotEmpty() }
         val viewId = node.viewIdResourceName?.takeIf { it.isNotEmpty() }

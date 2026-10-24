@@ -87,15 +87,27 @@ object NodeLocator {
             val actual = node.viewIdResourceName ?: return false
             if (actual != viewId && !actual.endsWith("/$viewId")) return false
         }
-        if (text != null) {
-            val actual = node.text?.toString() ?: return false
-            if (!compare(actual, text, exact)) return false
+
+        // 文本与描述互相兜底。
+        //
+        // 图标类控件（桌面图标、工具栏按钮）通常**只有 contentDescription 没有 text**；
+        // 而正文类控件反过来。调用方分不清某个字符串属于哪个字段，所以：
+        //   * 只给了 text → text 或 desc 任一命中即可
+        //   * 只给了 desc → desc 或 text 任一命中即可
+        //   * 两个都给了 → 两个都要命中（调用方明确要求）
+        val textOk = text == null || matchesField(node.text?.toString(), text, exact)
+        val descOk = desc == null || matchesField(node.contentDescription?.toString(), desc, exact)
+        val crossOk = when {
+            text != null && desc == null -> matchesField(node.contentDescription?.toString(), text, exact)
+            desc != null && text == null -> matchesField(node.text?.toString(), desc, exact)
+            else -> false
         }
-        if (desc != null) {
-            val actual = node.contentDescription?.toString() ?: return false
-            if (!compare(actual, desc, exact)) return false
-        }
-        return true
+        return (textOk && descOk) || crossOk
+    }
+
+    private fun matchesField(actual: String?, expected: String, exact: Boolean): Boolean {
+        if (actual == null) return false
+        return compare(actual, expected, exact)
     }
 
     private fun compare(actual: String, expected: String, exact: Boolean): Boolean =
