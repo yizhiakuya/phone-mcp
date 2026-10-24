@@ -15,6 +15,8 @@ Design rules that the tools encode:
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
@@ -24,7 +26,14 @@ from pydantic import Field
 
 from .bridge import BridgeError, BridgeClient, HumanOverrideError, MoneyBlockedError
 from .config import Config, ConfigError, load_config
-from .recorder import PATH_TO_TOOL, Recorder, RecorderError, default_dir
+from .recorder import (
+    DEFAULT_SETTLE_MS,
+    PATH_TO_TOOL,
+    STEP_SETTLE_MS,
+    Recorder,
+    RecorderError,
+    default_dir,
+)
 from .render import render_tree
 
 # 用户中断时返回给模型的固定信号。模型看到它就应当停止本轮操作。
@@ -811,6 +820,11 @@ async def phone_replay(
             if stop_on_warning and ("⚠" in text):
                 return _replay_failed(name, i, label, text, done)
             done.append(label)
+            # 回放比人手快得多，必须主动留出转场时间，否则下一步会点在
+            # 还没稳定下来的界面上。
+            settle = STEP_SETTLE_MS.get(step.tool, DEFAULT_SETTLE_MS)
+            if settle:
+                await asyncio.sleep(settle / 1000)
 
     return (
         f"重放「{name}」完成，{len(recording.steps)} 步全部成功：\n"

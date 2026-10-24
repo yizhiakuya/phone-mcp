@@ -53,6 +53,29 @@ PATH_TO_TOOL = {
     "/key": "phone_key",
 }
 
+# 每步之后等多久再执行下一步。
+#
+# 录制时人的操作天然有停顿（看界面、想下一步），回放时没有——连续发请求会
+# 撞上界面转场动画。实测：`home` 收起应用抽屉的动画约 1 秒，回放里只等 0.9 秒
+# 就发下一步，抽屉还没收完，上滑手势被理解成"关抽屉"而不是"开抽屉"，
+# 后续点击自然落空。
+#
+# 这些值宁可给大一点：回放本来就是为了省 token，不是省时间。
+STEP_SETTLE_MS = {
+    "phone_launch": 1500,
+    "phone_key": 1400,
+    "phone_swipe": 1200,
+    "phone_scroll": 900,
+    "phone_click": 900,
+    "phone_long_click": 1000,
+    "phone_tap": 900,
+    "phone_set_text": 400,
+    "phone_wait": 0,
+    "phone_wait_until": 0,
+}
+
+DEFAULT_SETTLE_MS = 800
+
 # 从 `describeForLog()` 的输出里抠出定位信息：
 #   text="发送" desc="..." id=com.app:id/btn bounds=[...]
 _TEXT_RE = re.compile(r'text="([^"]*)"')
