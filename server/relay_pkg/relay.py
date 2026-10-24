@@ -47,6 +47,11 @@ PAIRING_TTL = 300
 MAX_PENDING_PER_DEVICE = 32
 MAX_DEVICES = 16
 REQUEST_TIMEOUT = float(os.environ.get("PHONE_MCP_RELAY_TIMEOUT", "60"))
+
+# 长等待接口：手机端自己按请求参数控制超时，中继只负责给足余量。
+# 否则一次 120 秒的 watch 会被中继在 60 秒处掐断，模型以为手机没响应。
+LONG_POLL_PATHS = {"/watch", "/wait_until"}
+LONG_POLL_TIMEOUT = float(os.environ.get("PHONE_MCP_RELAY_LONG_TIMEOUT", "150"))
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # ---- 鉴权失败锁定 ----
@@ -445,10 +450,15 @@ async def forward_handler(request: web.Request) -> web.Response:
         await dev.ws.send_str(
             json.dumps({"type": "request", "id": req_id, "path": path, "body": body})
         )
-        reply = await asyncio.wait_for(fut, timeout=REQUEST_TIMEOUT)
+        # 长等待类接口（/watch、/wait_until）由手机端自己控制超时，
+        # 中继这里给足余量，避免把正常的阻塞等待掐断。
+        timeout = REQUEST_TIMEOUT
+        if path in LONG_POLL_PATHS:
+            timeout = max(timeout, LONG_POLL_TIMEOUT)
+        reply = await asyncio.wait_for(fut, timeout=timeout)
     except asyncio.TimeoutError:
         return web.json_response(
-            {"ok": False, "error": f"手机 {REQUEST_TIMEOUT:.0f}s 内无响应"}, status=504
+            {"ok": False, "error": f"手机 {timeout:.0f}s 内无响应"}, status=504
         )
     except (ConnectionResetError, RuntimeError) as exc:
         return web.json_response({"ok": False, "error": str(exc)}, status=503)

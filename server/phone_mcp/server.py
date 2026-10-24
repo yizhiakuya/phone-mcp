@@ -508,6 +508,94 @@ async def phone_wait(
         return _fail(exc)
 
 
+@server.tool(
+    name="phone_wait_until",
+    description=(
+        "等某个文本出现（或消失）。比 phone_wait 准确得多——\n"
+        "phone_wait 等的是「界面不再变化」，但加载动画可能一直在动；\n"
+        "这个等的是「发送成功」这类语义条件真正成立。\n"
+        "典型用法：点完发送 → wait_until(text=\"发送成功\")。"
+    ),
+)
+async def phone_wait_until(
+    text: Annotated[str, Field(description="目标文本，子串匹配")],
+    disappear: Annotated[bool, Field(description="true = 等它消失，false = 等它出现")] = False,
+    timeout_ms: Annotated[int, Field(description="最长等待毫秒", ge=200, le=60000)] = 5000,
+    step: Annotated[str | None, Field(description=_STEP_DESC)] = None,
+) -> str:
+    client = await _get_client()
+    try:
+        r = await client.post(
+            "/wait_until",
+            _with_step(
+                {"text": text, "disappear": disappear, "timeout_ms": timeout_ms}, step
+            ),
+        )
+        if r.get("satisfied"):
+            return f"已满足：「{text}」{'已消失' if disappear else '已出现'}。"
+        return (
+            f"等待超时：「{text}」{'仍然存在' if disappear else '没有出现'}。\n"
+            "界面可能变了，建议 phone_observe 重新看一眼。"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _fail(exc)
+
+
+@server.tool(
+    name="phone_watch",
+    description=(
+        "阻塞等待一条匹配的无障碍事件（通知、界面切换、点击、输入等）。\n"
+        "这是「监听」而不是「轮询」：没有事件时手机端会挂起等待，不耗 token。\n"
+        "典型用法：发完消息后等对方回复、等通知栏出现某条推送、等某个页面打开。\n"
+        "超时不算失败——会返回这段时间内发生的其他事件，便于判断到底怎么了。"
+    ),
+)
+async def phone_watch(
+    package: Annotated[str | None, Field(description="只匹配该包名的事件，如 com.tencent.mm")] = None,
+    text: Annotated[str | None, Field(description="只匹配文本包含该子串的事件")] = None,
+    types: Annotated[
+        list[str] | None,
+        Field(description="事件类型白名单：notification / window / content / click / scroll / text / focus"),
+    ] = None,
+    timeout_ms: Annotated[int, Field(description="最长等待毫秒", ge=500, le=120000)] = 30000,
+    step: Annotated[str | None, Field(description=_STEP_DESC)] = None,
+) -> str:
+    client = await _get_client()
+    payload: dict[str, Any] = {"timeout_ms": timeout_ms}
+    if package:
+        payload["package"] = package
+    if text:
+        payload["text"] = text
+    if types:
+        payload["types"] = types
+    try:
+        r = await client.post("/watch", _with_step(payload, step))
+    except Exception as exc:  # noqa: BLE001
+        return _fail(exc)
+
+    if r.get("matched"):
+        e = r.get("event") or {}
+        parts = [f"收到事件：{e.get('type')}"]
+        if e.get("package"):
+            parts.append(f"来自 {e['package']}")
+        if e.get("text"):
+            parts.append(f"内容「{e['text']}」")
+        return " · ".join(parts)
+
+    recent = r.get("recent") or []
+    if not recent:
+        return f"等待 {timeout_ms / 1000:.0f} 秒，没有发生任何匹配的事件。"
+    lines = [f"等待 {timeout_ms / 1000:.0f} 秒没有匹配的事件，但这段时间内发生了 {len(recent)} 条其他事件："]
+    for e in recent[:10]:
+        bits = [str(e.get("type"))]
+        if e.get("package"):
+            bits.append(str(e["package"]))
+        if e.get("text"):
+            bits.append(f"「{e['text']}」")
+        lines.append("  · " + " ".join(bits))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- 应用
 
 

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import org.json.JSONArray
 import org.json.JSONObject
 import top.rainaki.phonemcp.action.NodeLocator
+import top.rainaki.phonemcp.service.EventBus
 import top.rainaki.phonemcp.service.HumanOverride
 import top.rainaki.phonemcp.service.MoneyGuard
 import top.rainaki.phonemcp.service.PhoneMcpService
@@ -306,6 +307,73 @@ class DeviceApi {
         val timeout = body.optLong("timeout_ms", 5000)
         val quiet = body.optLong("quiet_ms", 400)
         return JSONObject().put("stable", svc.waitForIdle(timeout, quiet))
+    }
+
+    // ------------------------------------------------------------- 事件
+
+    /**
+     * 阻塞等待一条匹配的无障碍事件。
+     *
+     * 手机端没有事件时线程真正挂起，不占 CPU；超时返回 matched=false。
+     * 这是「监听」而非「轮询」的关键——模型不需要反复调用 observe。
+     */
+    fun watch(body: JSONObject): JSONObject {
+        requireService()
+        HumanOverride.check()
+        val timeout = body.optLong("timeout_ms", 30_000).coerceIn(500, 120_000)
+        val since = body.optLong("since_id", EventBus.currentId())
+        val pkg = body.optString("package").ifBlank { null }
+        val text = body.optString("text").ifBlank { null }
+        val types = body.optJSONArray("types")?.let { arr ->
+            (0 until arr.length()).mapNotNull { arr.optString(it).ifBlank { null } }.toSet()
+        } ?: emptySet()
+
+        val hit = EventBus.await(
+            afterId = since,
+            pkg = pkg,
+            textContains = text,
+            types = types,
+            timeoutMs = timeout,
+        )
+        return JSONObject().apply {
+            put("matched", hit != null)
+            if (hit != null) {
+                put("event", JSONObject().apply {
+                    put("id", hit.id)
+                    put("type", hit.type)
+                    put("package", hit.pkg ?: "")
+                    put("text", hit.text ?: "")
+                    put("at", hit.at)
+                })
+            } else {
+                // 超时也把这段时间攒下的事件带回去，模型据此判断"到底发生了什么"
+                val recent = EventBus.since(since, limit = 10)
+                put("recent_count", recent.size)
+                put("recent", org.json.JSONArray(recent.map { e ->
+                    JSONObject().apply {
+                        put("type", e.type)
+                        put("package", e.pkg ?: "")
+                        put("text", e.text ?: "")
+                    }
+                }))
+            }
+        }
+    }
+
+    /** 语义条件等待：等文本出现/消失。 */
+    fun waitUntil(body: JSONObject): JSONObject {
+        val svc = requireService()
+        HumanOverride.check()
+        val text = body.optString("text").ifBlank { null }
+            ?: throw IllegalArgumentException("需要 text")
+        val disappear = body.optBoolean("disappear", false)
+        val timeout = body.optLong("timeout_ms", 5000).coerceIn(200, 60_000)
+        val ok = svc.waitForText(text, disappear, timeout)
+        return JSONObject().apply {
+            put("satisfied", ok)
+            put("text", text)
+            put("disappear", disappear)
+        }
     }
 
     // ------------------------------------------------------------- 截图

@@ -21,7 +21,7 @@ MCP Client ──stdio──► phone-mcp (Python) ──HTTPS──► Relay �
 
 | 组件 | 位置 | 职责 |
 |---|---|---|
-| MCP 服务器 | `server/` | 15 个工具，把模型调用翻译成对手机的请求 |
+| MCP 服务器 | `server/` | 17 个工具，把模型调用翻译成对手机的请求 |
 | 中继 | `relay/` | 手机与 MCP 之间的会合点，转发密文，不持有密钥 |
 | Android App | `android/` | 无障碍能力的唯一持有者，执行全部界面操作 |
 
@@ -112,7 +112,9 @@ python -m phone_mcp.pairing \
 | `phone_scroll` | 滚动列表 |
 | `phone_set_text` | 输入文本 |
 | `phone_key` | 系统按键（back / home / recents 等） |
-| `phone_wait` | 等待界面稳定 |
+| `phone_wait` | 等待界面稳定（树指纹不再变化） |
+| `phone_wait_until` | 等待某段文本出现或消失，语义条件更准 |
+| `phone_watch` | 阻塞等待无障碍事件（通知、界面切换等），监听而非轮询 |
 | `phone_apps` / `phone_launch` | 列出并启动应用 |
 | `phone_status` | 连接与服务状态 |
 

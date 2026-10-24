@@ -284,6 +284,8 @@ class TunnelClient(
         "/set_text" -> 200 to api.setText(body)
         "/key" -> 200 to api.key(body)
         "/wait_idle" -> 200 to api.waitIdle(body)
+        "/wait_until" -> 200 to api.waitUntil(body)
+        "/watch" -> 200 to api.watch(body)
         "/user_status" -> 200 to api.overrideStatus()
         "/apps" -> 200 to api.apps()
         "/launch" -> 200 to api.launch(body)

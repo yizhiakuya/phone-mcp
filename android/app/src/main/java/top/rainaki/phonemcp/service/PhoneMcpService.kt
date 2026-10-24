@@ -107,6 +107,8 @@ class PhoneMcpService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         recordEvent(event.eventType)
+        // 进事件总线，供 phone_watch 阻塞等待
+        runCatching { EventBus.recordFrom(event) }
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ->
                 event.packageName?.toString()?.let { lastPackage = it }
@@ -541,6 +543,54 @@ class PhoneMcpService : AccessibilityService() {
                 stableSince = 0L
             }
             Thread.sleep(60)
+        }
+        return false
+    }
+
+    /**
+     * 等到界面上出现（或消失）指定文本。**必须在后台线程调用**。
+     *
+     * 比 `waitForIdle` 有用得多：点完「发送」之后，界面可能一直在动
+     * （转圈、动画），但真正该等的是「发送成功」这几个字出现。
+     *
+     * 判定基于无障碍树的可见节点文本，不看像素。
+     *
+     * @param text 目标文本，子串匹配
+     * @param disappear true = 等它消失
+     * @return true = 条件在超时前满足
+     */
+    fun waitForText(
+        text: String,
+        disappear: Boolean = false,
+        timeoutMs: Long,
+        pollMs: Long = 150,
+    ): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val found = runCatching {
+                callOnMain(timeoutMs = 3_000) { treeContainsText(text) }
+            }.getOrDefault(false)
+            if (found != disappear) return true
+            Thread.sleep(pollMs)
+        }
+        return false
+    }
+
+    /** 当前可见树里是否含指定文本。**必须在主线程调用**。 */
+    private fun treeContainsText(text: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < MAX_TREE_NODES) {
+            val n = queue.removeFirst()
+            visited++
+            if (!n.isVisibleToUser) continue
+            if (n.text?.toString()?.contains(text) == true) return true
+            if (n.contentDescription?.toString()?.contains(text) == true) return true
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { queue.add(it) }
+            }
         }
         return false
     }
