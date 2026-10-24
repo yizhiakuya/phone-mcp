@@ -1,0 +1,29 @@
+[project]
+name = "phone-mcp"
+version = "1.0.0"
+description = "Control an Android phone from Claude via accessibility tree and screenshots"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=2.3.0,<3",
+    "httpx>=0.27",
+    "pillow>=10.0",
+]
+
+[project.scripts]
+phone-mcp = "phone_mcp.__main__:main"
+phone-mcp-pair = "phone_mcp.pairing:main"
+
+[project.optional-dependencies]
+pairing = ["qrcode[pil]>=8,<9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["phone_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -1,0 +1,24 @@
+[Unit]
+Description=Phone MCP tunnel relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/phonemcp-relay
+EnvironmentFile=/opt/phonemcp-relay/relay.env
+ExecStart=/usr/bin/python3 /opt/phonemcp-relay/relay.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+StateDirectory=phonemcp-relay
+StateDirectoryMode=0700
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/phonemcp-relay
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 手机轮廓 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M39,28h30a4,4 0,0 1,4 4v44a4,4 0,0 1,-4 4h-30a4,4 0,0 1,-4 -4v-44a4,4 0,0 1,4 -4zM39,34v38h30v-38z" />
+    <!-- 屏幕里的触点 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,48a6,6 0,1 1,0 12a6,6 0,1 1,0 -12z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,36h0.1M54,72h0.1" />
+</vector>

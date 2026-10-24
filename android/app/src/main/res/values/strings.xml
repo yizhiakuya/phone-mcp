@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Phone MCP</string>
+    <string name="service_label">Phone MCP 控制服务</string>
+    <string name="accessibility_description">允许电脑上的 AI 通过无障碍树读取界面、点击、滑动与输入文字。关闭后手机端立即停止响应远程指令。</string>
+</resources>

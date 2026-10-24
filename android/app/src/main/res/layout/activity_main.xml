@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- 状态 -->
+        <LinearLayout style="@style/Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="运行状态" />
+
+            <TextView
+                android:id="@+id/statusService"
+                style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="无障碍服务：检查中…" />
+
+            <TextView
+                android:id="@+id/statusTunnel"
+                style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="中继隧道：检查中…" />
+
+            <TextView
+                android:id="@+id/statusDevice"
+                style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/text_secondary" />
+
+            <TextView
+                android:id="@+id/statusVersion"
+                style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/statusOverride"
+                style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/warn"
+                android:textSize="13sp"
+                android:visibility="gone"
+                android:text="⚠ 人工接管中，自动操作已暂停" />
+
+            <Button
+                android:id="@+id/btnResume"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:visibility="gone"
+                android:text="恢复自动控制" />
+
+            <TextView
+                android:id="@+id/statusStopBtn"
+                style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textSize="12sp"
+                android:textColor="@color/text_secondary"
+                android:text="中断条：检查中…" />
+
+            <Button
+                android:id="@+id/btnOverlayPerm"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="授权悬浮窗（用于显示中断条）"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btnUpdate"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="检查更新" />
+        </LinearLayout>
+
+        <!-- 中继隧道 -->
+        <LinearLayout style="@style/Card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="中继隧道（4G / 异地可用）" />
+
+            <TextView style="@style/BodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                android:text="首次使用请扫描电脑生成的配对二维码。配对码 5 分钟有效，只能使用一次；配对后自动重连，无需输入密码。" />
+
+            <TextView
+                android:id="@+id/deviceIdText"
+                style="@style/MonoText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:textSize="12sp"
+                android:text="设备 ID：—" />
+
+            <Button
+                android:id="@+id/btnPair"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="扫码配对" />
+
+            <Button
+                android:id="@+id/btnForget"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="断开并清除本机配对" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnOpenAccessibility"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="打开无障碍设置" />
+
+        <Button
+            android:id="@+id/btnBattery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="忽略电池优化（防止后台被杀）" />
+
+        <TextView
+            style="@style/BodyText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textColor="@color/text_secondary"
+            android:text="推荐扫码配对，使用加密中继。局域网直连默认关闭；仅在可信网络或受保护的隧道内手动开启。" />
+
+    </LinearLayout>
+</ScrollView>

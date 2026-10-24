@@ -1,0 +1,37 @@
+# 忽略
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+local.properties
+android/.gradle/
+android/build/
+android/app/build/
+*.iml
+.idea/
+.kotlin/
+
+# ---- 凭据与签名材料：绝不进版本库 ----
+# 签名私钥丢了就无法覆盖升级，泄露则任何人都能签发冒名 APK
+android/keystore/
+*.jks
+*.keystore
+keystore.properties
+password.txt
+
+# 本机凭据、端到端密钥、短期配对二维码
+.secrets/
+relay/devices.json
+relay/registry.json
+pairing*.png
+pairing*.json
+mcp-env.json
+*.token
+e2e.key
+
+# 日志与临时产物
+*.log
+.DS_Store

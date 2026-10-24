@@ -1,0 +1,10 @@
+{
+  "versionCode": 1,
+  "versionName": "1.0.0",
+  "minSdk": 30,
+  "apk": "/apk/phonemcp-latest.apk",
+  "sizeBytes": 0,
+  "md5": "",
+  "changelog": "初始版本",
+  "releasedAt": ""
+}
