@@ -395,6 +395,99 @@ class DeviceApi {
         }
     }
 
+    // ------------------------------------------------------------- 文字识别
+
+    /**
+     * 截图 → OCR → 带坐标的文字行。
+     *
+     * 用于无障碍树读不到内容的界面（游戏、Canvas、Flutter 自绘）。
+     * 返回的坐标已经是**屏幕原生坐标**，可直接用于 phone_tap。
+     */
+    fun ocr(body: JSONObject): JSONObject {
+        val svc = requireService()
+        svc.callOnMain(timeoutMs = 5_000) { MoneyGuard.enforceRead(svc) }
+        // 识别不需要缩小：缩了反而降低准确率，且坐标换算容易出错。
+        // 只限制最大宽度，避免超大截图拖慢识别。
+        val maxWidth = body.optInt("max_width", 0).takeIf { it > 0 }
+        val bitmap = svc.takeScreenshotBlocking(maxWidth)
+            ?: throw IllegalStateException("截图失败")
+
+        val screen = svc.screenSize()
+        // takeScreenshotBlocking 可能缩小了图片，坐标要换算回屏幕原生
+        val scale = if (bitmap.width > 0) screen.width().toFloat() / bitmap.width else 1f
+
+        val lines = try {
+            top.rainaki.phonemcp.capture.Ocr.recognize(bitmap, scale)
+        } finally {
+            bitmap.recycle()
+        }
+
+        val arr = JSONArray()
+        for (l in lines) {
+            arr.put(JSONObject().apply {
+                put("t", l.text)
+                put("b", JSONArray().put(l.bounds.left).put(l.bounds.top)
+                    .put(l.bounds.right).put(l.bounds.bottom))
+            })
+        }
+        return JSONObject().apply {
+            put("ok", true)
+            put("count", lines.size)
+            put("lines", arr)
+            put("screen", JSONObject().put("w", screen.width()).put("h", screen.height()))
+        }
+    }
+
+    /**
+     * 按文字点击：OCR 找到目标文字，点它的中心。
+     *
+     * 这是 OCR 真正有用的地方——把「看得见但点不到」变成「按文本点」。
+     * 找不到时返回明确错误，不会盲点。
+     */
+    fun ocrClick(body: JSONObject): JSONObject {
+        val svc = requireControl()
+        val text = body.optString("text").ifBlank { null }
+            ?: throw IllegalArgumentException("需要 text")
+        val index = body.optInt("index", 0)
+
+        val screen = svc.screenSize()
+        val bitmap = svc.takeScreenshotBlocking(null)
+            ?: throw IllegalStateException("截图失败")
+        val scale = if (bitmap.width > 0) screen.width().toFloat() / bitmap.width else 1f
+        val lines = try {
+            top.rainaki.phonemcp.capture.Ocr.recognize(bitmap, scale)
+        } finally {
+            bitmap.recycle()
+        }
+
+        val hits = top.rainaki.phonemcp.capture.Ocr.find(lines, text)
+        if (hits.isEmpty()) {
+            throw NoSuchElementException(
+                "屏幕上没有识别到「$text」。可能文字是图片/图标，或识别不准——" +
+                "可以先用 ocr 看看都识别出了什么"
+            )
+        }
+        if (index >= hits.size) {
+            throw IllegalArgumentException("「$text」只找到 ${hits.size} 处，没有第 ${index + 1} 处")
+        }
+        val target = hits[index]
+        // 落点资金判定：OCR 目标没有 NodeInfo，只能靠坐标 + 整屏
+        val (cx, cy) = top.rainaki.phonemcp.capture.Ocr.center(target)
+        svc.callOnMain(timeoutMs = 5_000) {
+            val root = svc.activeRoot()
+            if (root != null) MoneyGuard.enforceTarget(MoneyGuard.nodeAt(root, cx, cy))
+        }
+        // 文字本身也要过一遍目标词判定
+        MoneyGuard.enforceTargetText(target.text)
+
+        val ok = svc.tapPoint(cx, cy)
+        return JSONObject().apply {
+            put("ok", ok)
+            put("target", "OCR:\"${target.text}\" [${target.bounds.left},${target.bounds.top}]")
+            put("hits", hits.size)
+        }
+    }
+
     // ------------------------------------------------------------- 应用
 
     /** 列出可启动的第三方应用（有 LAUNCHER intent 的）。 */

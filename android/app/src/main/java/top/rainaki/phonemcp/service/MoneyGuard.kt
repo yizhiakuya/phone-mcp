@@ -214,6 +214,19 @@ object MoneyGuard {
     }
 
     /**
+     * 第二段检查（OCR 版）：目标只有文字，没有 NodeInfo。
+     *
+     * OCR 识别的文字同样可能写着「确认支付」——不能因为拿不到节点就跳过判定。
+     */
+    fun enforceTargetText(text: String?) {
+        if (text.isNullOrBlank()) return
+        val hit = firstHit(text)
+        if (hit != null) {
+            throw BlockedException("目标涉及资金（命中「$hit」），已拒绝执行")
+        }
+    }
+
+    /**
      * 读取类检查：只拦**整包**判定，不拦整屏判定。
      *
      * 资金类 App 的界面本身就是敏感数据：余额、卡号、付款码（不记名凭证，

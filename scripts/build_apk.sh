@@ -71,12 +71,23 @@ fi
 export JAVA_HOME="${JAVA_HOME:-D:\\tools\\jdk-21}"
 
 # 自更新源。不设置则打包出的 APK 不启用「检查更新」。
-GRADLE_ARGS="--no-daemon -q assembleRelease"
+GRADLE_ARGS="-q assembleRelease"
 if [ -n "${PHONE_MCP_UPDATE_BASE_URL:-}" ]; then
     GRADLE_ARGS="$GRADLE_ARGS -PupdateBaseUrl=$PHONE_MCP_UPDATE_BASE_URL"
     echo "自更新源: $PHONE_MCP_UPDATE_BASE_URL"
 else
     echo "自更新源: 未配置（App 内「检查更新」将提示未配置）"
+fi
+
+# 默认用 Gradle daemon。
+#
+# `--no-daemon` 每次都要重新启动 JVM 并重新加载整个构建模型，实测 41 秒；
+# daemon 常驻后同样的构建 8 秒。改代码后的增量构建差距更明显。
+#
+# daemon 会常驻约 1-2GB 内存。设 PHONE_MCP_NO_DAEMON=1 可退回一次性构建
+# （例如在 CI 或内存紧张的机器上）。
+if [ "${PHONE_MCP_NO_DAEMON:-0}" = "1" ]; then
+    GRADLE_ARGS="$GRADLE_ARGS --no-daemon"
 fi
 
 cmd //c "set JAVA_HOME=${JAVA_HOME}&& $(cygpath -w "$GRADLE") $GRADLE_ARGS"

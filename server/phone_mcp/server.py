@@ -609,6 +609,86 @@ async def phone_watch(
 # ---------------------------------------------------------------- 应用
 
 
+@server.tool(
+    name="phone_ocr",
+    description=(
+        "识别当前屏幕上的文字，返回带坐标的行。\n"
+        "用于无障碍树读不到内容的界面：游戏、Canvas、Flutter/RN 自绘组件。\n"
+        "返回的坐标是屏幕原生坐标，可直接用于 phone_tap。\n"
+        "先用它看看界面上有什么，再用 phone_ocr_click 按文字点。"
+    ),
+)
+async def phone_ocr(
+    max_width: Annotated[
+        int, Field(description="截图最大宽度，0=原图。缩小会降低识别率，建议 0", ge=0, le=4000)
+    ] = 0,
+    contains: Annotated[str | None, Field(description="只返回包含该关键字的行")] = None,
+    step: Annotated[str | None, Field(description=_STEP_DESC)] = None,
+) -> str:
+    client = await _get_client()
+    try:
+        r = await client.post("/ocr", _with_step({"max_width": max_width}, step))
+    except Exception as exc:  # noqa: BLE001
+        return _fail(exc)
+
+    lines = r.get("lines") or []
+    if contains:
+        lines = [l for l in lines if contains in str(l.get("t") or "")]
+    if not lines:
+        msg = "屏幕上没有识别到文字。"
+        if contains:
+            msg += f"（含「{contains}」的行一个也没有）"
+        return msg + "这个界面可能全是图片，或确实是空白。"
+
+    screen = r.get("screen") or {}
+    out = [
+        f"识别到 {len(lines)} 行文字（屏幕 {screen.get('w')}x{screen.get('h')}，"
+        "坐标为原生像素，可直接 phone_tap）："
+    ]
+    for l in lines:
+        b = l.get("b") or [0, 0, 0, 0]
+        cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
+        out.append(f"  「{l.get('t')}」 中心 ({cx}, {cy})  框 {b}")
+    return "\n".join(out)
+
+
+@server.tool(
+    name="phone_ocr_click",
+    description=(
+        "按屏幕上的文字点击。OCR 找到目标文字，点它的中心。\n"
+        "这是游戏 / Canvas / Flutter 界面里「按文本点击」的唯一办法——\n"
+        "这类界面无障碍树是空的，phone_click 找不到任何节点。\n"
+        "找不到文字时明确报错，不会盲点。"
+    ),
+)
+async def phone_ocr_click(
+    text: Annotated[str, Field(description="要点击的文字（精确优先，其次包含匹配）")],
+    index: Annotated[
+        int, Field(description="同一文字有多处时点第几个（从 0 开始）", ge=0, le=50)
+    ] = 0,
+    step: Annotated[str | None, Field(description=_STEP_DESC)] = None,
+) -> str:
+    client = await _get_client()
+    try:
+        r = await client.post(
+            "/ocr_click", _with_step({"text": text, "index": index}, step)
+        )
+    except MoneyBlockedError as exc:
+        raise ToolError(f"{MONEY_BLOCKED}\n原因：{exc}") from None
+    except HumanOverrideError:
+        raise ToolError(USER_TOOK_OVER) from None
+    except Exception as exc:  # noqa: BLE001
+        return _fail(exc)
+    if r.get("ok"):
+        hits = r.get("hits")
+        extra = f"（共 {hits} 处匹配）" if hits and hits > 1 else ""
+        return f"成功。目标：{r.get('target')}{extra}"
+    return f"失败：{r.get('error', '未知原因')}"
+
+
+# ---------------------------------------------------------------- 应用
+
+
 @server.tool(name="phone_apps", description="列出手机上可启动的应用（包名 + 名称）。")
 async def phone_apps() -> str:
     client = await _get_client()

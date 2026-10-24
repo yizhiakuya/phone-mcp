@@ -288,6 +288,8 @@ class TunnelClient(
         "/watch" -> 200 to api.watch(body)
         "/user_status" -> 200 to api.overrideStatus()
         "/apps" -> 200 to api.apps()
+        "/ocr" -> 200 to api.ocr(body)
+        "/ocr_click" -> 200 to api.ocrClick(body)
         "/launch" -> 200 to api.launch(body)
         else -> 404 to errorJson("未知接口 $path")
     }
