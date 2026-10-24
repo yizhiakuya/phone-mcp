@@ -299,22 +299,50 @@ class MainActivity : android.app.Activity() {
 
     private fun confirmUpdate(updater: Updater, release: Updater.Release) {
         val cached = updater.hasDownloaded(release)
-        val msg = buildString {
+        val header = buildString {
             append("发现新版本 ${release.versionName}")
             append("（当前 ${BuildConfig.VERSION_NAME}）")
+        }
+        val footer = if (cached) {
+            "安装包已下载完成，可直接安装。"
+        } else {
+            "下载后系统会弹一次安装确认，点「安装」即可。"
+        }
+
+        // changelog 是 Markdown（GitHub Release 说明），必须渲染后再显示，
+        // 否则用户看到的是 `## 标题` 这样的源码。
+        val content = MarkdownView.render(this, release.changelog.ifBlank { footer })
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val p = (16 * resources.displayMetrics.density).toInt()
+            setPadding(p, p, p, 0)
+            addView(android.widget.TextView(this@MainActivity).apply {
+                text = header
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextColor(0xFF6B7280.toInt())
+                setPadding(0, 0, 0, p / 2)
+            })
+            addView(
+                content,
+                android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f,
+                ),
+            )
             if (release.changelog.isNotBlank()) {
-                append("\n\n")
-                append(release.changelog)
-            }
-            if (cached) {
-                append("\n\n安装包已下载完成，可直接安装。")
-            } else {
-                append("\n\n下载后系统会弹一次安装确认，点「安装」即可。")
+                addView(android.widget.TextView(this@MainActivity).apply {
+                    text = footer
+                    setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+                    setTextColor(0xFF6B7280.toInt())
+                    setPadding(0, p / 2, 0, 0)
+                })
             }
         }
+
         android.app.AlertDialog.Builder(this)
             .setTitle(if (cached) "可以安装了" else "更新可用")
-            .setMessage(msg)
+            .setView(container)
             .setPositiveButton(if (cached) "立即安装" else "下载并安装") { _, _ ->
                 startUpdate(updater, release)
             }

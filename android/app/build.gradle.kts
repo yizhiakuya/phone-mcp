@@ -32,8 +32,8 @@ android {
         minSdk = 30
         targetSdk = 35
         // 版本号由 scripts/build_apk.sh 自动递增并写回这里，用于 App 内自动更新判断
-        versionCode = 50
-        versionName = "1.1.19"
+        versionCode = 52
+        versionName = "1.1.21"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // 只打 arm64-v8a。

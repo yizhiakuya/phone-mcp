@@ -213,7 +213,7 @@ if [ "$UPLOAD" -eq 1 ] && [ "$BUMP" -eq 1 ] && command -v gh >/dev/null 2>&1; th
                 printf '## phone-mcp %s\n\n' "$NEW_NAME"
                 printf '%s\n' "${CHANGELOG:-版本 $NEW_NAME}"
                 printf '\n### 安装\n\n'
-                printf '下载 `phone-mcp-%s.apk` 直接安装。首次使用需开启无障碍服务、'
+                printf '下载 `phone-mcp-%s.apk` 直接安装。首次使用需开启无障碍服务、' "$NEW_NAME"
                 printf '授予悬浮窗权限；部分国产 ROM 还需允许「自启动」「后台无限制」'
                 printf '「后台弹出界面」。\n\n'
                 printf '**仅支持 arm64 设备、Android 11 及以上。** 签名须与旧版一致才能覆盖安装。\n'
@@ -221,12 +221,27 @@ if [ "$UPLOAD" -eq 1 ] && [ "$BUMP" -eq 1 ] && command -v gh >/dev/null 2>&1; th
                 printf 'App 内「检查更新」直接从本仓库的 Releases 获取，无需其他更新源。\n'
             } > "$NOTES"
         fi
-        # MD5 必须出现在 release 说明里：App 端的 Updater 从这里解析并校验，
-        # 没有它就只能靠大小判断，防不住下到半截或中间被替换。
-        if ! grep -qiE 'md5[:\s`]+[0-9a-f]{32}' "$NOTES"; then
-            printf '\n---\n\n大小 %s bytes（%.1f MB）\n\nMD5: `%s`\n' \
-                "$SIZE" "$(awk "BEGIN{printf \"%.1f\", $SIZE/1048576}")" "$MD5" >> "$NOTES"
-        fi
+        # 机器可读的元数据统一放在末尾的代码块里。
+        #
+        # 为什么不散落在正文：changelog 里可能顺口提到版本号（例如
+        # "之前把 1.1.19 换算成 10119"），正则扫正文会抓到错的那个。
+        # 放在固定的尾部代码块里，App 只解析这一段就不会误读。
+        #
+        # 格式约定（App 端 Updater 按此解析）：
+        #   ```meta
+        #   versionCode: 51
+        #   size: 23847802
+        #   md5: 9fd3d5...
+        #   ```
+        # 注意：Gradle 构建产物不含本注释，App 端只认 ```meta 块。
+        {
+            printf '\n```meta\n'
+            printf 'versionCode: %s\n' "$NEW_CODE"
+            printf 'versionName: %s\n' "$NEW_NAME"
+            printf 'size: %s\n' "$SIZE"
+            printf 'md5: %s\n' "$MD5"
+            printf '```\n'
+        } >> "$NOTES"
         git -C "$ROOT" tag -a "$TAG" -m "phone-mcp $NEW_NAME" 2>/dev/null || true
         git -C "$ROOT" push origin "$TAG" -q 2>/dev/null || true
         gh release create "$TAG" "$DIST/phone-mcp-$NEW_NAME.apk" \

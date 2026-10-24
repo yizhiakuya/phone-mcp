@@ -64,9 +64,8 @@ class Updater(private val activity: Activity) {
 
             val tag = obj.optString("tag_name", "")
             val versionName = tag.removePrefix("v").trim()
-            val versionCode = versionCodeOf(versionName)
-            if (versionCode <= 0) {
-                return CheckResult.Failed("无法从 release tag「$tag」解析版本号")
+            if (versionName.isBlank()) {
+                return CheckResult.Failed("release 没有 tag 名，无法判断版本")
             }
 
             // 找 .apk 资产
@@ -86,17 +85,19 @@ class Updater(private val activity: Activity) {
             }
 
             val body = obj.optString("body", "")
+            // 机器可读的元数据只从尾部的 ```meta 块里取。
+            // 正文（changelog）里可能顺口提到版本号，全局正则扫会抓到错的。
+            val meta = parseMeta(body)
             val release = Release(
-                versionCode = versionCode,
+                versionCode = meta["versioncode"]?.toIntOrNull() ?: 0,
                 versionName = versionName,
                 apkUrl = apkUrl,
-                // MD5 从 release 说明里解析（发版脚本会写 `MD5: <hex>`）
-                md5 = extractMd5(body),
-                sizeBytes = size,
-                changelog = body.take(800),
+                md5 = meta["md5"].orEmpty().lowercase(),
+                sizeBytes = meta["size"]?.toLongOrNull()?.takeIf { it > 0 } ?: size,
+                changelog = stripMeta(body).take(1500),
             )
 
-            if (versionCode <= BuildConfig.VERSION_CODE) {
+            if (!isNewer(versionName, release.versionCode)) {
                 CheckResult.UpToDate
             } else {
                 CheckResult.Available(release)
@@ -108,23 +109,67 @@ class Updater(private val activity: Activity) {
     }
 
     /**
-     * 版本号 → versionCode，规则与 build_apk.sh 一致：
-     * `major*10000 + minor*100 + patch`。`1.1.18` → 10118。
+     * 判断远端版本是否比本地新。
+     *
+     * **不能把 versionName 换算成 versionCode 再比**——本项目里 versionCode 是
+     * 单调自增的整数（49、50、51…），和 `1.1.19` 这种三段式版本名没有换算关系。
+     * 早期版本按 `major*10000+minor*100+patch` 算，得出 10119，永远大于本地的 50，
+     * 于是每次检查都提示有新版。
+     *
+     * 优先用 release 说明里显式写的 `versionCode: N`（发版脚本会写），
+     * 没有就按版本名逐段比较。
      */
-    private fun versionCodeOf(name: String): Int {
-        val parts = name.split(".")
-        if (parts.size < 2) return 0
-        val major = parts.getOrNull(0)?.toIntOrNull() ?: return 0
-        val minor = parts.getOrNull(1)?.toIntOrNull() ?: return 0
-        val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
-        return major * 10000 + minor * 100 + patch
+    private fun isNewer(remoteName: String, remoteCode: Int): Boolean {
+        if (remoteCode > 0) return remoteCode > BuildConfig.VERSION_CODE
+        val remote = parseVersion(remoteName)
+        val local = parseVersion(BuildConfig.VERSION_NAME)
+        if (remote == null || local == null) {
+            // 版本名解析不出来时保守处理：当作没有更新，避免反复提示安装同一版
+            return false
+        }
+        for (i in 0 until maxOf(remote.size, local.size)) {
+            val r = remote.getOrElse(i) { 0 }
+            val l = local.getOrElse(i) { 0 }
+            if (r != l) return r > l
+        }
+        return false
     }
 
-    /** 从 release 说明里抠出 MD5。格式：`MD5: <32位hex>` 或 `MD5 \`<hex>\``。 */
-    private fun extractMd5(body: String): String {
-        val m = Regex("""(?i)md5[:\s`]+([0-9a-f]{32})""").find(body) ?: return ""
-        return m.groupValues[1].lowercase()
+    /** `1.1.19` → [1, 1, 19]。解析失败返回 null。 */
+    private fun parseVersion(name: String): List<Int>? {
+        val parts = name.trim().removePrefix("v").split(".")
+        val nums = parts.mapNotNull { it.takeWhile(Char::isDigit).toIntOrNull() }
+        return nums.takeIf { it.isNotEmpty() }
     }
+
+    /**
+     * 解析尾部 ```meta 代码块里的键值对。
+     *
+     * 发版脚本会写：
+     * ```
+     * versionCode: 51
+     * versionName: 1.1.20
+     * size: 23847802
+     * md5: 9fd3d5...
+     * ```
+     * 只在 meta 块内解析，不扫全文——正文里出现的数字不算数。
+     */
+    private fun parseMeta(body: String): Map<String, String> {
+        val m = Regex("""```meta\s*\n([\s\S]*?)```""").find(body) ?: return emptyMap()
+        return m.groupValues[1].lineSequence()
+            .mapNotNull { line ->
+                val idx = line.indexOf(':')
+                if (idx <= 0) return@mapNotNull null
+                val k = line.substring(0, idx).trim().lowercase()
+                val v = line.substring(idx + 1).trim()
+                if (k.isEmpty() || v.isEmpty()) null else k to v
+            }
+            .toMap()
+    }
+
+    /** 去掉 meta 块，剩下的才是给用户看的正文。 */
+    private fun stripMeta(body: String): String =
+        body.replace(Regex("""```meta\s*\n[\s\S]*?```"""), "").trim()
 
     /** GitHub 的错误信息对用户没意义，翻译成能看懂的说法。 */
     private fun friendlyError(t: Throwable): String {
