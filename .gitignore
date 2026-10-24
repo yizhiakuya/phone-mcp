@@ -26,11 +26,15 @@ password.txt
 .secrets/
 relay/devices.json
 relay/registry.json
-pairing*.png
-pairing*.json
 mcp-env.json
 *.token
 e2e.key
+
+# 配对二维码只在项目根目录生成（配对 CLI 的默认输出位置）。
+# 不能写全局的 pairing*.png/json——android/app/src/test/resources/ 下
+# 有测试用的固定样本，被误伤会导致别人 clone 后跑不了单测。
+/pairing*.png
+/pairing*.json
 
 # 日志与临时产物
 *.log
