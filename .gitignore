@@ -39,3 +39,6 @@ e2e.key
 # 日志与临时产物
 *.log
 .DS_Store
+
+# 发布临时产物
+dist/release-notes.md

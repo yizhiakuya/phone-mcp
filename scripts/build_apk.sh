@@ -180,3 +180,27 @@ HTML
 else
     echo "跳过上传（--no-upload）"
 fi
+
+# ---- 发布到 GitHub Releases ----
+# 只有真正发版（递增了版本号 + 上传了 APK）才建 release。
+# 用 --no-bump 或 --no-upload 的本地构建不发布，避免刷出一堆同版本 release。
+if [ "$UPLOAD" -eq 1 ] && [ "$BUMP" -eq 1 ] && command -v gh >/dev/null 2>&1; then
+    if gh repo view "$(git -C "$ROOT" remote get-url origin 2>/dev/null | sed 's|.*github.com[:/]||; s|\.git$||')" >/dev/null 2>&1; then
+        REPO=$(git -C "$ROOT" remote get-url origin | sed 's|.*github.com[:/]||; s|\.git$||')
+        TAG="v$NEW_NAME"
+        echo "发布到 GitHub Releases：$REPO $TAG …"
+        cp "$DIST/phone-mcp.apk" "$DIST/phone-mcp-$NEW_NAME.apk"
+        NOTES="$DIST/release-notes.md"
+        if [ ! -f "$NOTES" ]; then
+            printf '## phone-mcp %s\n\n%s\n\n大小 %s bytes，MD5 `%s`\n' \
+                "$NEW_NAME" "${CHANGELOG:-版本 $NEW_NAME}" "$SIZE" "$MD5" > "$NOTES"
+        fi
+        git -C "$ROOT" tag -a "$TAG" -m "phone-mcp $NEW_NAME" 2>/dev/null || true
+        git -C "$ROOT" push origin "$TAG" -q 2>/dev/null || true
+        gh release create "$TAG" "$DIST/phone-mcp-$NEW_NAME.apk" \
+            --repo "$REPO" --title "phone-mcp $NEW_NAME" --notes-file "$NOTES" \
+            || echo "⚠ release 创建失败（可能已存在），APK 仍可从下载页获取"
+    else
+        echo "跳过 GitHub Release（未配置 origin 或 gh 未登录）"
+    fi
+fi
