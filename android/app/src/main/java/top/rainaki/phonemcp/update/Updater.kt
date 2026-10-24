@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.FileProvider
+import org.json.JSONArray
 import org.json.JSONObject
 import top.rainaki.phonemcp.BuildConfig
 import java.io.File
@@ -20,11 +21,17 @@ import java.security.MessageDigest
  * Android 不允许应用静默安装自己——系统一定会弹一次安装确认。所以这里把
  * "下载 → 找文件 → 点安装" 全自动化，只留最后一次系统确认给用户点。
  *
+ * ## 更新源是 GitHub Releases
+ *
+ * 直接从 Releases API 读最新版本，不再依赖自建服务器的版本清单。
+ * 好处是发版只需推 GitHub 一处，不用同步两份元数据。
+ *
  * 流程：
- *   1. 拉版本清单（version.json），比对 versionCode
- *   2. 下载 APK 到应用私有 cache 目录
- *   3. 校验 MD5（防止下到半截或中间被替换）
- *   4. 通过 FileProvider 交给系统安装器
+ *   1. 调 `GET /repos/{owner}/{repo}/releases/latest` 拿最新 release
+ *   2. 从 tag 名（如 `v1.1.18`）解析版本号，与本地 versionCode 比对
+ *   3. 下载 release 里的 APK 资产
+ *   4. 校验大小与 MD5（清单里的 md5 由 release body 或本地资产摘要提供）
+ *   5. 通过 FileProvider 交给系统安装器
  */
 class Updater(private val activity: Activity) {
 
@@ -46,34 +53,89 @@ class Updater(private val activity: Activity) {
     /** 检查更新。网络操作，必须在后台线程调用。 */
     fun check(): CheckResult {
         return try {
-            val base = BuildConfig.UPDATE_BASE_URL.trimEnd('/')
-            if (base.isBlank()) {
+            if (BuildConfig.UPDATE_REPO.isBlank()) {
                 return CheckResult.Failed(
-                    "未配置更新源。构建时用 -PupdateBaseUrl=<地址> 指定后重新打包。"
+                    "未配置更新仓库。构建时用 -PupdateRepo=<owner/repo> 指定后重新打包。"
                 )
             }
-            val json = httpGetText("$base/version.json")
+            val api = "https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest"
+            val json = httpGetText(api)
             val obj = JSONObject(json)
 
-            val remoteCode = obj.optInt("versionCode", 0)
-            val apkPath = obj.optString("apk", "/apk/phonemcp-latest.apk")
+            val tag = obj.optString("tag_name", "")
+            val versionName = tag.removePrefix("v").trim()
+            val versionCode = versionCodeOf(versionName)
+            if (versionCode <= 0) {
+                return CheckResult.Failed("无法从 release tag「$tag」解析版本号")
+            }
+
+            // 找 .apk 资产
+            val assets = obj.optJSONArray("assets") ?: JSONArray()
+            var apkUrl = ""
+            var size = 0L
+            for (i in 0 until assets.length()) {
+                val a = assets.optJSONObject(i) ?: continue
+                if (a.optString("name").endsWith(".apk", ignoreCase = true)) {
+                    apkUrl = a.optString("browser_download_url")
+                    size = a.optLong("size", 0)
+                    break
+                }
+            }
+            if (apkUrl.isBlank()) {
+                return CheckResult.Failed("release $tag 里没有 APK 资产")
+            }
+
+            val body = obj.optString("body", "")
             val release = Release(
-                versionCode = remoteCode,
-                versionName = obj.optString("versionName", "?"),
-                apkUrl = if (apkPath.startsWith("http")) apkPath else "$base$apkPath",
-                md5 = obj.optString("md5", "").lowercase(),
-                sizeBytes = obj.optLong("sizeBytes", 0),
-                changelog = obj.optString("changelog", ""),
+                versionCode = versionCode,
+                versionName = versionName,
+                apkUrl = apkUrl,
+                // MD5 从 release 说明里解析（发版脚本会写 `MD5: <hex>`）
+                md5 = extractMd5(body),
+                sizeBytes = size,
+                changelog = body.take(800),
             )
 
-            if (remoteCode <= BuildConfig.VERSION_CODE) {
+            if (versionCode <= BuildConfig.VERSION_CODE) {
                 CheckResult.UpToDate
             } else {
                 CheckResult.Available(release)
             }
         } catch (t: Throwable) {
             Log.w(TAG, "check failed", t)
-            CheckResult.Failed(t.message ?: t.javaClass.simpleName)
+            CheckResult.Failed(friendlyError(t))
+        }
+    }
+
+    /**
+     * 版本号 → versionCode，规则与 build_apk.sh 一致：
+     * `major*10000 + minor*100 + patch`。`1.1.18` → 10118。
+     */
+    private fun versionCodeOf(name: String): Int {
+        val parts = name.split(".")
+        if (parts.size < 2) return 0
+        val major = parts.getOrNull(0)?.toIntOrNull() ?: return 0
+        val minor = parts.getOrNull(1)?.toIntOrNull() ?: return 0
+        val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
+        return major * 10000 + minor * 100 + patch
+    }
+
+    /** 从 release 说明里抠出 MD5。格式：`MD5: <32位hex>` 或 `MD5 \`<hex>\``。 */
+    private fun extractMd5(body: String): String {
+        val m = Regex("""(?i)md5[:\s`]+([0-9a-f]{32})""").find(body) ?: return ""
+        return m.groupValues[1].lowercase()
+    }
+
+    /** GitHub 的错误信息对用户没意义，翻译成能看懂的说法。 */
+    private fun friendlyError(t: Throwable): String {
+        val msg = t.message ?: t.javaClass.simpleName
+        return when {
+            msg.contains("403") || msg.contains("rate limit", true) ->
+                "GitHub 请求过于频繁，请稍后再试"
+            msg.contains("404") -> "更新仓库不存在或还没有发布过 release"
+            msg.contains("Unable to resolve host", true) ||
+                msg.contains("UnknownHost", true) -> "无法连接 GitHub，检查网络"
+            else -> msg
         }
     }
 

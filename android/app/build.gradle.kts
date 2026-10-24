@@ -32,8 +32,8 @@ android {
         minSdk = 30
         targetSdk = 35
         // 版本号由 scripts/build_apk.sh 自动递增并写回这里，用于 App 内自动更新判断
-        versionCode = 49
-        versionName = "1.1.18"
+        versionCode = 50
+        versionName = "1.1.19"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // 只打 arm64-v8a。
@@ -46,13 +46,13 @@ android {
         }
 
         // 中继地址与设备凭据由首次扫码配对下发，不打包进 APK。
-        // 自更新：版本清单与 APK 从这里的基址取。
-        // 构建时通过 -PupdateBaseUrl=... 或环境变量 PHONE_MCP_UPDATE_BASE_URL 指定；
+        // 自更新：从 GitHub Releases 读最新版本，APK 也取自那里。
+        // 构建时通过 -PupdateRepo=owner/repo 或环境变量 PHONE_MCP_UPDATE_REPO 指定；
         // 留空表示不启用自更新（App 内「检查更新」会提示未配置）。
-        val updateBaseUrl = (project.findProperty("updateBaseUrl") as String?)
-            ?: System.getenv("PHONE_MCP_UPDATE_BASE_URL")
+        val updateRepo = (project.findProperty("updateRepo") as String?)
+            ?: System.getenv("PHONE_MCP_UPDATE_REPO")
             ?: ""
-        buildConfigField("String", "UPDATE_BASE_URL", "\"$updateBaseUrl\"")
+        buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
     }
 
     buildTypes {

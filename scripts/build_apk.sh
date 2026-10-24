@@ -6,6 +6,7 @@
 #   bash scripts/build_apk.sh --no-bump       # 构建，不递增版本
 #   bash scripts/build_apk.sh --no-upload     # 构建，不上传
 #   bash scripts/build_apk.sh --changelog "修复截图超时"
+#   bash scripts/build_apk.sh --notes release-notes.md   # 用自定义 release notes
 #
 # 上传需要设置环境变量（无内置默认值，避免把个人主机信息带进仓库）：
 #   PHONE_MCP_RELAY_HOST   形如 user@host
@@ -22,12 +23,14 @@ REMOTE_VER="$WEBROOT/version.json"
 BUMP=1
 UPLOAD=1
 CHANGELOG=""
+NOTES_FILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-bump) BUMP=0; shift ;;
         --no-upload) UPLOAD=0; shift ;;
         --changelog) CHANGELOG="$2"; shift 2 ;;
+        --notes) NOTES_FILE="$2"; shift 2 ;;
         *) echo "未知参数: $1" >&2; exit 1 ;;
     esac
 done
@@ -70,11 +73,17 @@ fi
 
 export JAVA_HOME="${JAVA_HOME:-D:\\tools\\jdk-21}"
 
-# 自更新源。不设置则打包出的 APK 不启用「检查更新」。
+# 自更新仓库（owner/repo）。不设置则打包出的 APK 不启用「检查更新」。
+# 默认取 git remote，所以 clone 下来的人开箱即用。
 GRADLE_ARGS="-q assembleRelease"
-if [ -n "${PHONE_MCP_UPDATE_BASE_URL:-}" ]; then
-    GRADLE_ARGS="$GRADLE_ARGS -PupdateBaseUrl=$PHONE_MCP_UPDATE_BASE_URL"
-    echo "自更新源: $PHONE_MCP_UPDATE_BASE_URL"
+UPDATE_REPO="${PHONE_MCP_UPDATE_REPO:-}"
+if [ -z "$UPDATE_REPO" ]; then
+    UPDATE_REPO=$(git -C "$ROOT" remote get-url origin 2>/dev/null \
+        | sed 's|.*github\.com[:/]||; s|\.git$||' || true)
+fi
+if [ -n "$UPDATE_REPO" ]; then
+    GRADLE_ARGS="$GRADLE_ARGS -PupdateRepo=$UPDATE_REPO"
+    echo "自更新源: GitHub Releases · $UPDATE_REPO"
 else
     echo "自更新源: 未配置（App 内「检查更新」将提示未配置）"
 fi
@@ -190,10 +199,33 @@ if [ "$UPLOAD" -eq 1 ] && [ "$BUMP" -eq 1 ] && command -v gh >/dev/null 2>&1; th
         TAG="v$NEW_NAME"
         echo "发布到 GitHub Releases：$REPO $TAG …"
         cp "$DIST/phone-mcp.apk" "$DIST/phone-mcp-$NEW_NAME.apk"
-        NOTES="$DIST/release-notes.md"
-        if [ ! -f "$NOTES" ]; then
-            printf '## phone-mcp %s\n\n%s\n\n大小 %s bytes，MD5 `%s`\n' \
-                "$NEW_NAME" "${CHANGELOG:-版本 $NEW_NAME}" "$SIZE" "$MD5" > "$NOTES"
+        # release notes：每次发版都重新生成，不复用上一版的文件。
+        #
+        # 之前的设计是"有 release-notes.md 就用它"，结果 1.1.19 复用了 1.1.18
+        # 的笔记，标题和下载链接都指向旧版本。要写详细 notes 就用 --notes 指定，
+        # 否则用 changelog 生成——保证内容永远和版本对得上。
+        NOTES="$DIST/release-notes-$NEW_NAME.md"
+        if [ -n "${NOTES_FILE:-}" ] && [ -f "$NOTES_FILE" ]; then
+            cp "$NOTES_FILE" "$NOTES"
+            echo "使用指定 notes: $NOTES_FILE"
+        else
+            {
+                printf '## phone-mcp %s\n\n' "$NEW_NAME"
+                printf '%s\n' "${CHANGELOG:-版本 $NEW_NAME}"
+                printf '\n### 安装\n\n'
+                printf '下载 `phone-mcp-%s.apk` 直接安装。首次使用需开启无障碍服务、'
+                printf '授予悬浮窗权限；部分国产 ROM 还需允许「自启动」「后台无限制」'
+                printf '「后台弹出界面」。\n\n'
+                printf '**仅支持 arm64 设备、Android 11 及以上。** 签名须与旧版一致才能覆盖安装。\n'
+                printf '\n### 更新方式\n\n'
+                printf 'App 内「检查更新」直接从本仓库的 Releases 获取，无需其他更新源。\n'
+            } > "$NOTES"
+        fi
+        # MD5 必须出现在 release 说明里：App 端的 Updater 从这里解析并校验，
+        # 没有它就只能靠大小判断，防不住下到半截或中间被替换。
+        if ! grep -qiE 'md5[:\s`]+[0-9a-f]{32}' "$NOTES"; then
+            printf '\n---\n\n大小 %s bytes（%.1f MB）\n\nMD5: `%s`\n' \
+                "$SIZE" "$(awk "BEGIN{printf \"%.1f\", $SIZE/1048576}")" "$MD5" >> "$NOTES"
         fi
         git -C "$ROOT" tag -a "$TAG" -m "phone-mcp $NEW_NAME" 2>/dev/null || true
         git -C "$ROOT" push origin "$TAG" -q 2>/dev/null || true

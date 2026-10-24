@@ -92,8 +92,27 @@ bash scripts/build_apk.sh --changelog "修复了 XXX"
    - 更新 `phonemcp-latest.apk` 软链
    - 更新 `version.json`
    - **重新生成下载页** `index-phonemcp.html`（版本号/MD5/大小自动同步）
+5. 打 tag 并发布到 GitHub Releases（含 APK 与 MD5）
 
 完成后打印两个地址。
+
+### App 从哪检查更新
+
+**GitHub Releases**，不是自建服务器。App 调
+`GET https://api.github.com/repos/<owner>/<repo>/releases/latest`：
+
+- 从 `tag_name`（如 `v1.1.19`）解析版本号，与本地 `versionCode` 比对
+- 从 `assets` 里找 `.apk` 资产下载
+- 从 release 说明里解析 `MD5: <hex>` 做完整性校验
+
+所以**发版只需推 GitHub**。自建服务器上的 `version.json` 现在只服务于网页下载页，
+App 不再读取。
+
+构建时用 `-PupdateRepo=owner/repo` 或环境变量 `PHONE_MCP_UPDATE_REPO` 指定仓库；
+不指定则不启用自更新。`build_apk.sh` 默认从 git remote 推断，通常无需手动配置。
+
+**MD5 必须写进 release 说明**——脚本会自动追加。没有它，App 只能靠文件大小
+判断完整性，防不住下载中断或中间被替换。
 
 ### 下载链接从哪来
 
@@ -101,9 +120,10 @@ bash scripts/build_apk.sh --changelog "修复了 XXX"
 |---|---|
 | `https://relay.example.com:8900/phonemcp` | 下载页（手机浏览器打开） |
 | `https://relay.example.com:8900/apk/phonemcp-latest.apk` | APK 直链 |
-| `https://relay.example.com:8900/version.json` | 版本清单（App 自更新用） |
+| `https://github.com/<owner>/<repo>/releases/latest` | **App 自更新用**（Releases API） |
 
-三者都由 nginx 静态提供，物理路径在 中继主机的 `/var/www/phone-album/`。
+前两者由 nginx 静态提供，物理路径在中继主机的 `/var/www/phone-album/`；
+GitHub Releases 由发版脚本自动创建。
 
 **nginx 路由**（在 `/etc/nginx/sites-enabled/phone-album` 的 TLS server 块里）：
 
