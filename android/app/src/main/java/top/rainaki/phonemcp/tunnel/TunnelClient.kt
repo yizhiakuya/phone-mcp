@@ -243,9 +243,12 @@ class TunnelClient(
 
         // 解密成功说明密文确实来自持有 e2e_key 的电脑端。但中继仍可能把
         // 一条**合法旧密文**重放一次，所以还要校验 rid/ts。
+        //
+        // 状态码用 400 而不是 409：409 已被"用户中断"占用，电脑端看到 409
+        // 会当成人工接管并抛 ToolError。重放是安全事件，不是用户操作。
         ReplayGuard.check(rid, ts)?.let { reason ->
             Log.w(TAG, "replay rejected for $path: $reason (rid=$rid ts=$ts)")
-            replyPlain(id, 409, errorJson("replay_rejected|$reason"))
+            replyPlain(id, 400, errorJson("replay_rejected|$reason"))
             return
         }
 

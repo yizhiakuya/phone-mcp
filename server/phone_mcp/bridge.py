@@ -128,9 +128,17 @@ class BridgeClient:
         from .e2ee import E2EError, open_sealed
 
         if "plain_error" in body:
-            # 手机端端到端解密失败时回传的诊断。
+            # 手机端回传的明文诊断。
             # **不能把里面的文本原样透给模型**——这条响应没有经过认证，
-            # 中继（或顶替隧道的人）可以塞任意指令进去。只给固定文案。
+            # 中继（或顶替隧道的人）可以塞任意指令进去。只按已知标记给固定文案。
+            raw = body["plain_error"]
+            marker = str(raw.get("error", "")) if isinstance(raw, dict) else ""
+            if marker.startswith("replay_rejected"):
+                # 重放是安全事件：说明有人在重复发送抓到的密文
+                raise BridgeError(
+                    "手机端拒绝了重放请求（请求号重复或时间戳过期）。"
+                    "这通常意味着有人在中继上重复发送旧的加密指令，请检查中继日志。"
+                )
             raise BridgeError(
                 "手机端无法解密请求。常见原因：两端 e2e_key 不一致（重新配对可解决），"
                 "或手机 App 版本过旧。"
