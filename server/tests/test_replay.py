@@ -124,12 +124,37 @@ def _client(url, key):
 
 @pytest.mark.asyncio
 async def test_rid_increments_each_request(rid_url):
-    """每次请求 rid 必须递增，手机端才能据此拒绝重放。"""
+    """每次请求 rid 必须严格递增，手机端才能据此拒绝重放。
+
+    rid 由「毫秒时间戳 * 1000 + 序号」构造，不是 1,2,3——这样跨进程重启
+    也不会回退。这里只验证单调性。
+    """
     c = _client(rid_url, RidBridge.e2e_key)
     for _ in range(3):
         await c.post("/click", {"x": 1})
-    assert RidBridge.seen_rids == [1, 2, 3]
+    rids = RidBridge.seen_rids
+    assert len(rids) == 3
+    assert rids[0] < rids[1] < rids[2], f"rid 必须递增，实际 {rids}"
     await c.aclose()
+
+
+def test_rid_is_monotonic_across_process_restart():
+    """新进程（新的 BridgeClient）的 rid 必须大于旧进程的最后一个。
+
+    否则 MCP 重启后，手机端还记着旧 maxRid，新请求会被全部当成重放拒掉。
+    """
+    from phone_mcp.bridge import BridgeClient
+    from phone_mcp.config import Config
+
+    cfg = Config(relay_url="http://127.0.0.1:1", relay_token="t",
+                 device_id="phone-test", e2e_key="A" * 43, timeout=1)
+    old = BridgeClient(cfg)
+    old_rid = old._next_rid()
+
+    # 模拟进程重启：全新的 BridgeClient，内部计数器从 0 开始
+    fresh = BridgeClient(cfg)
+    new_rid = fresh._next_rid()
+    assert new_rid > old_rid, f"重启后 rid 回退了：{new_rid} <= {old_rid}"
 
 
 @pytest.mark.asyncio

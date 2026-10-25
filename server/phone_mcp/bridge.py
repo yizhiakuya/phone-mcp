@@ -65,6 +65,8 @@ class BridgeClient:
         self._client: httpx.AsyncClient | None = None
         # 请求号：单调递增，手机端据此拒绝重放
         self._rid = 0
+        # 本次请求的 rid，用于校验响应回显
+        self._last_rid = 0
 
     @property
     def mode(self) -> str:
@@ -96,9 +98,26 @@ class BridgeClient:
     # -- calls -------------------------------------------------------------
 
     def _next_rid(self) -> int:
-        """单调递增的请求号。每次请求 +1，手机端据此拒绝重放。"""
+        """单调递增的请求号。手机端据此拒绝重放。
+
+        **必须跨进程单调**：MCP 进程重启后如果从 1 重新开始，而手机端隧道
+        还活着（maxRid 是旧值），新进程的请求会被全部当成重放拒掉。
+
+        所以用「微秒时间戳 * 1000 + 进程内序号」构造：
+        * 天然单调 —— 时间只会前进
+        * 跨进程安全 —— 重启后时间戳更大，不会回退
+        * 留出 3 位给进程内并发（单进程内一次只发一个请求，够用）
+
+        为什么用微秒不用毫秒：两个进程在同一毫秒内各发一个请求时，
+        毫秒级时间戳会完全相同，rid 相等 → 第二个被当成重放拒掉。
+        微秒级碰撞概率低到可以忽略，且 Python 的 time.time() 精度足够。
+
+        代价：rid 不再是 1,2,3 这样的小整数，但它只用于比较大小，不影响正确性。
+        """
+        import time
+
         self._rid += 1
-        return self._rid
+        return int(time.time() * 1_000_000) * 1000 + (self._rid % 1000)
 
     def _sealed(self, path: str, payload: dict[str, Any] | None) -> dict[str, Any]:
         """把请求体封装成端到端密文。中继只能看到 blob。
@@ -114,6 +133,9 @@ class BridgeClient:
 
         rid = self._next_rid()
         ts = int(time.time())
+        # 记住本次请求的 rid，响应回来时用它校验（不能用 self._rid，
+        # 那是最新分配值，若期间有别的请求就会错位）
+        self._last_rid = rid
         return {
             "e2ee": seal(
                 self._config.e2e_key, self._config.device_id, path, payload or {},
@@ -167,7 +189,7 @@ class BridgeClient:
         # 注意不能写成 `if rid and ...`：rid=0 会被当成"没有回显"而跳过校验，
         # 而 rid=0 恰恰是"响应里没带 rid"的默认值——攻击者只要让它缺失就能绕过。
         # 正确做法是要求它必须等于本次请求号（本项目从 1 开始，0 永远非法）。
-        if rid != self._rid:
+        if rid != self._last_rid:
             raise BridgeError("响应与请求不匹配（可能是中继重放了旧响应），已拒绝使用。")
         return data
 

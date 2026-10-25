@@ -126,6 +126,9 @@ class TunnelClient(
         socket = http.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 connectedAt = System.currentTimeMillis()
+                // 注意：这里**不能** ReplayGuard.reset()。
+                // rid 由电脑端用「毫秒时间戳*1000 + 序号」构造，跨进程单调，
+                // 手机端保留 maxRid 才能挡住"重连后重放旧密文"。归零反而放开攻击窗口。
                 notify(State.CONNECTED, null)
                 Log.i(TAG, "tunnel connected to $url")
             }
