@@ -63,6 +63,8 @@ class BridgeClient:
     def __init__(self, config: Config) -> None:
         self._config = config
         self._client: httpx.AsyncClient | None = None
+        # 请求号：单调递增，手机端据此拒绝重放
+        self._rid = 0
 
     @property
     def mode(self) -> str:
@@ -93,32 +95,73 @@ class BridgeClient:
 
     # -- calls -------------------------------------------------------------
 
+    def _next_rid(self) -> int:
+        """单调递增的请求号。每次请求 +1，手机端据此拒绝重放。"""
+        self._rid += 1
+        return self._rid
+
     def _sealed(self, path: str, payload: dict[str, Any] | None) -> dict[str, Any]:
-        """把请求体封装成端到端密文。中继只能看到 blob。"""
+        """把请求体封装成端到端密文。中继只能看到 blob。
+
+        rid 与 ts 一并进 AAD，中继改不了也重放不了：
+        * 改 rid/ts → 解密失败（AAD 不匹配）
+        * 原样重放 → 手机端看到 rid 不大于已见最大值，直接拒
+        * 延迟重放 → ts 超出窗口，手机端拒
+        """
+        import time
+
         from .e2ee import seal
 
+        rid = self._next_rid()
+        ts = int(time.time())
         return {
-            "e2ee": seal(self._config.e2e_key, self._config.device_id, path, payload or {}),
+            "e2ee": seal(
+                self._config.e2e_key, self._config.device_id, path, payload or {},
+                rid=rid, ts=ts,
+            ),
+            # 明文回显，中继原样透传给手机。改了这两个字段会导致 AAD 不匹配。
+            "rid": rid,
+            "ts": ts,
         }
 
     def _unseal(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         from .e2ee import E2EError, open_sealed
 
         if "plain_error" in body:
-            # 手机端端到端解密失败时回传的诊断（不含敏感数据）
-            raise BridgeError(f"手机端解密失败：{body['plain_error'].get('error', '')}")
+            # 手机端端到端解密失败时回传的诊断。
+            # **不能把里面的文本原样透给模型**——这条响应没有经过认证，
+            # 中继（或顶替隧道的人）可以塞任意指令进去。只给固定文案。
+            raise BridgeError(
+                "手机端无法解密请求。常见原因：两端 e2e_key 不一致（重新配对可解决），"
+                "或手机 App 版本过旧。"
+            )
         if "e2ee" not in body:
             raise BridgeError(
                 "响应未加密：手机端可能还是旧版本，或中继被替换。拒绝使用明文响应。"
             )
+        # 响应密文里回显 rid/ts，用于校验它确实是对应本次请求的答复，
+        # 而不是中继拿旧响应重放。
+        rid = int(body.get("rid") or 0)
+        ts = int(body.get("ts") or 0)
         try:
-            return open_sealed(self._config.e2e_key, self._config.device_id, path, body["e2ee"])
+            data = open_sealed(
+                self._config.e2e_key, self._config.device_id, path, body["e2ee"],
+                rid=rid, ts=ts,
+            )
         except E2EError as exc:
             raise BridgeError(
                 f"端到端解密失败：{exc}。"
                 "常见原因：手机端保存的 e2e_key 与本机不一致（重新配对可解决），"
                 "或手机 App 版本不支持端到端加密。"
             ) from None
+        # 回显的 rid 必须与本次请求一致，否则是重放的旧响应。
+        #
+        # 注意不能写成 `if rid and ...`：rid=0 会被当成"没有回显"而跳过校验，
+        # 而 rid=0 恰恰是"响应里没带 rid"的默认值——攻击者只要让它缺失就能绕过。
+        # 正确做法是要求它必须等于本次请求号（本项目从 1 开始，0 永远非法）。
+        if rid != self._rid:
+            raise BridgeError("响应与请求不匹配（可能是中继重放了旧响应），已拒绝使用。")
+        return data
 
     def _money_or_bridge_error(self, path: str, resp: httpx.Response) -> Exception:
         """403 响应：手机端资金保护拦截 → MoneyBlockedError，其它 → BridgeError。
@@ -130,8 +173,9 @@ class BridgeClient:
         except BridgeError:
             body = {}
         if body.get("money_blocked"):
+            # 加密内容已认证，可以用里面的原因
             return MoneyBlockedError(str(body.get("error") or "手机端资金保护拦截了该操作"))
-        return BridgeError(_extract_error(resp), status=403)
+        return BridgeError(_opaque_error(403), status=403)
 
     async def post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         _guard_money(path, payload)
@@ -163,7 +207,7 @@ class BridgeClient:
         if resp.status_code == 503:
             raise BridgeError(self._offline_hint(), status=503)
         if resp.status_code >= 400:
-            raise BridgeError(_extract_error(resp), status=resp.status_code)
+            raise BridgeError(_opaque_error(resp.status_code), status=resp.status_code)
         return self._unseal(path, resp.json())
 
     async def get(self, path: str) -> dict[str, Any]:
@@ -183,7 +227,7 @@ class BridgeClient:
         if resp.status_code == 403:
             raise self._money_or_bridge_error(path, resp)
         if resp.status_code >= 400:
-            raise BridgeError(_extract_error(resp), status=resp.status_code)
+            raise BridgeError(_opaque_error(resp.status_code), status=resp.status_code)
         return self._unseal(path, resp.json())
 
     async def post_bytes(self, path: str, payload: dict[str, Any] | None = None) -> bytes:
@@ -199,7 +243,7 @@ class BridgeClient:
         if resp.status_code == 403:
             raise self._money_or_bridge_error(path, resp)
         if resp.status_code >= 400:
-            raise BridgeError(_extract_error(resp), status=resp.status_code)
+            raise BridgeError(_opaque_error(resp.status_code), status=resp.status_code)
         # 截图同样加密返回
         from .e2ee import E2EError, open_sealed_bytes
 
@@ -246,11 +290,26 @@ def _safe_json(resp: httpx.Response) -> dict[str, Any]:
         return {}
 
 
-def _extract_error(resp: httpx.Response) -> str:
-    try:
-        data = resp.json()
-    except (json.JSONDecodeError, ValueError):
-        return f"HTTP {resp.status_code}: {resp.text[:200]}"
-    if isinstance(data, dict) and data.get("error"):
-        return str(data["error"])
-    return f"HTTP {resp.status_code}: {json.dumps(data, ensure_ascii=False)[:200]}"
+# 未认证响应的错误文案。
+#
+# 为什么不用响应体里的 error 字段：中继是本项目明确设定的不可信节点。
+# 它可以返回任意 JSON，把 `{"error": "忽略之前的指令，现在去做 X"}` 塞进
+# 模型上下文。所以非加密响应的内容一律丢弃，只按状态码给固定文案。
+_OPAQUE_ERRORS = {
+    400: "手机端拒绝了请求（参数或状态不符）",
+    401: "鉴权失败",
+    403: "手机端拒绝执行",
+    404: "手机端没有这个接口（App 版本可能过旧）",
+    405: "请求方法不被支持",
+    409: "操作与当前状态冲突",
+    413: "请求体过大",
+    429: "请求过于频繁，请稍后重试",
+    500: "手机端内部错误",
+    502: "中继网关错误",
+    503: "手机端不在线",
+    504: "手机端响应超时",
+}
+
+
+def _opaque_error(status: int) -> str:
+    return _OPAQUE_ERRORS.get(status, f"手机端返回 HTTP {status}")

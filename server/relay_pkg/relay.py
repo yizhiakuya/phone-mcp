@@ -447,9 +447,14 @@ async def forward_handler(request: web.Request) -> web.Response:
     dev.pending[req_id] = fut
 
     try:
-        await dev.ws.send_str(
-            json.dumps({"type": "request", "id": req_id, "path": path, "body": body})
-        )
+        # rid / ts 是电脑端放进 body 的重放防护字段，原样透传给手机。
+        # 中继不解释它们（改了会导致 AAD 不匹配，解密直接失败）。
+        relay_msg = {"type": "request", "id": req_id, "path": path, "body": body}
+        if isinstance(body, dict):
+            for k in ("rid", "ts"):
+                if k in body:
+                    relay_msg[k] = body[k]
+        await dev.ws.send_str(json.dumps(relay_msg))
         # 长等待类接口（/watch、/wait_until）由手机端自己控制超时，
         # 中继这里给足余量，避免把正常的阻塞等待掐断。
         timeout = REQUEST_TIMEOUT

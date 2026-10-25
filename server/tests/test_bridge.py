@@ -36,6 +36,8 @@ TREE = {
 
 
 class FakeBridge(BaseHTTPRequestHandler):
+    _rid = 0
+    _ts = 0
     token = "secret"
     e2e_key = ""          # 由 fixture 注入
     device_id = "phone-test"
@@ -55,12 +57,14 @@ class FakeBridge(BaseHTTPRequestHandler):
 
     def _unseal(self, body: dict[str, Any]) -> dict[str, Any]:
         from phone_mcp.e2ee import open_sealed
-        return open_sealed(self.e2e_key, self.device_id, self._path_only(), body["e2ee"])
+        return open_sealed(self.e2e_key, self.device_id, self._path_only(), body["e2ee"],
+                            rid=int(body.get("rid") or 0), ts=int(body.get("ts") or 0))
 
     def _sealed_json(self, status: int, payload: dict[str, Any]) -> None:
         from phone_mcp.e2ee import seal
-        blob = seal(self.e2e_key, self.device_id, self._path_only(), payload)
-        self._send_json(status, {"e2ee": blob})
+        blob = seal(self.e2e_key, self.device_id, self._path_only(), payload,
+                    rid=self._rid, ts=self._ts)
+        self._send_json(status, {"e2ee": blob, "rid": self._rid, "ts": self._ts})
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode()
@@ -95,6 +99,8 @@ class FakeBridge(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         # 先读完请求体再判鉴权，否则客户端还在写 body 时服务端就关连接，会变成 ReadError
         body = self._read_json()
+        self._rid = int(body.get("rid") or 0)
+        self._ts = int(body.get("ts") or 0)
         if not self._auth_ok():
             return self._send_json(401, {"ok": False, "error": "未授权"})
         path = self.path.rstrip("/")
@@ -190,7 +196,13 @@ async def test_connect_error_has_actionable_hint():
 
 
 @pytest.mark.asyncio
-async def test_unknown_endpoint_surfaces_server_message(client: BridgeClient):
+async def test_unknown_endpoint_gives_opaque_message(client: BridgeClient):
+    """未认证响应的正文不能被透传给模型——中继可以塞任意指令进去。
+
+    所以只按状态码给固定文案，不显示服务端原始 error 字段。
+    """
     with pytest.raises(BridgeError) as info:
         await client.post("/nope", {})
-    assert "未知接口" in str(info.value)
+    msg = str(info.value)
+    assert "404" not in msg or "接口" in msg
+    assert "未知接口" not in msg  # 不再透传服务端文本

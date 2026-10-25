@@ -12,6 +12,7 @@ import okhttp3.WebSocketListener
 import org.json.JSONObject
 import top.rainaki.phonemcp.http.DeviceApi
 import top.rainaki.phonemcp.util.E2ee
+import top.rainaki.phonemcp.util.ReplayGuard
 import java.util.concurrent.TimeUnit
 
 /**
@@ -218,6 +219,9 @@ class TunnelClient(
         if (!running || socket == null) return
         val id = msg.optString("id")
         val path = msg.optString("path")
+        // rid/ts 由电脑端生成并进 AAD；这里先取出来做重放校验
+        val rid = msg.optLong("rid", 0)
+        val ts = msg.optLong("ts", 0)
 
         // 端到端解密：中继只转发 blob，密钥只在本机与电脑端。
         // 解密失败说明密钥不匹配或密文被篡改——直接拒绝，不执行任何动作。
@@ -226,7 +230,7 @@ class TunnelClient(
             val envelope = msg.optJSONObject("body") ?: JSONObject()
             val blob = envelope.optString("e2ee")
             if (blob.isBlank()) throw IllegalStateException("请求未加密")
-            E2ee.open(e2eKey, deviceId, path, blob)
+            E2ee.open(e2eKey, deviceId, path, blob, rid = rid, ts = ts)
         } catch (t: Throwable) {
             Log.e(TAG, "e2ee open failed for $path", t)
             // 诊断：把失败原因和关键参数回传，便于定位两端不一致。
@@ -237,15 +241,23 @@ class TunnelClient(
             return
         }
 
+        // 解密成功说明密文确实来自持有 e2e_key 的电脑端。但中继仍可能把
+        // 一条**合法旧密文**重放一次，所以还要校验 rid/ts。
+        ReplayGuard.check(rid, ts)?.let { reason ->
+            Log.w(TAG, "replay rejected for $path: $reason (rid=$rid ts=$ts)")
+            replyPlain(id, 409, errorJson("replay_rejected|$reason"))
+            return
+        }
+
         try {
             when {
                 path == "/screenshot" -> {
                     val bytes = api.screenshot(body)
-                    replyBinary(id, bytes, "image/jpeg", path)
+                    replyBinary(id, bytes, "image/jpeg", path, rid, ts)
                 }
                 else -> {
                     val (status, payload) = dispatch(path, body)
-                    replyJson(id, status, payload, path)
+                    replyJson(id, status, payload, path, rid, ts)
                 }
             }
         } catch (e: top.rainaki.phonemcp.service.MoneyGuard.BlockedException) {
@@ -254,21 +266,21 @@ class TunnelClient(
                 put("ok", false)
                 put("error", e.message)
                 put("money_blocked", true)
-            }, path)
+            }, path, rid, ts)
         } catch (e: top.rainaki.phonemcp.service.UserOperatingException) {
             replyJson(id, 409, JSONObject().apply {
                 put("ok", false)
                 put("error", e.message)
                 put("user_operating", true)
-                put("retry_after_ms", e.retryAfterMs)
-            }, path)
+                put("locked_ms", e.lockedMs)
+            }, path, rid, ts)
         } catch (e: IllegalArgumentException) {
-            replyJson(id, 400, errorJson(e.message), path)
+            replyJson(id, 400, errorJson(e.message), path, rid, ts)
         } catch (e: NoSuchElementException) {
-            replyJson(id, 404, errorJson(e.message), path)
+            replyJson(id, 404, errorJson(e.message), path, rid, ts)
         } catch (e: Throwable) {
             Log.e(TAG, "action failed: $path", e)
-            replyJson(id, 500, errorJson(e.message ?: e.javaClass.simpleName), path)
+            replyJson(id, 500, errorJson(e.message ?: e.javaClass.simpleName), path, rid, ts)
         }
     }
 
@@ -309,10 +321,17 @@ class TunnelClient(
         socket?.send(msg.toString())
     }
 
-    private fun replyJson(id: String, status: Int, body: JSONObject, path: String? = null) {
+    private fun replyJson(
+        id: String,
+        status: Int,
+        body: JSONObject,
+        path: String? = null,
+        rid: Long = 0,
+        ts: Long = 0,
+    ) {
         val sealed = try {
             // 用请求路径作为 AAD 的一部分，保持与电脑端一致
-            E2ee.seal(e2eKey, deviceId, path ?: "", body)
+            E2ee.seal(e2eKey, deviceId, path ?: "", body, rid = rid, ts = ts)
         } catch (t: Throwable) {
             Log.e(TAG, "e2ee seal failed", t)
             return
@@ -322,13 +341,24 @@ class TunnelClient(
             put("id", id)
             put("status", status)
             put("e2ee", sealed)
+            // rid/ts 明文回显：电脑端据此确认这是对本次请求的答复，
+            // 而不是中继重放的旧响应。它们已进 AAD，中继改了会导致解密失败。
+            if (rid > 0) put("rid", rid)
+            if (ts > 0) put("ts", ts)
         }
         socket?.send(msg.toString())
     }
 
-    private fun replyBinary(id: String, bytes: ByteArray, contentType: String, path: String) {
+    private fun replyBinary(
+        id: String,
+        bytes: ByteArray,
+        contentType: String,
+        path: String,
+        rid: Long = 0,
+        ts: Long = 0,
+    ) {
         val sealed = try {
-            E2ee.sealBytes(e2eKey, deviceId, path, bytes)
+            E2ee.sealBytes(e2eKey, deviceId, path, bytes, rid = rid, ts = ts)
         } catch (t: Throwable) {
             Log.e(TAG, "e2ee sealBytes failed", t)
             return
@@ -339,6 +369,8 @@ class TunnelClient(
             put("status", 200)
             put("content_type", contentType)
             put("e2ee", sealed)
+            if (rid > 0) put("rid", rid)
+            if (ts > 0) put("ts", ts)
         }
         socket?.send(msg.toString())
     }

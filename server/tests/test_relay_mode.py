@@ -16,6 +16,8 @@ TREE = {"screen": {"w": 1080, "h": 2400}, "package": "com.x", "node_count": 1,
 
 
 class FakeRelay(BaseHTTPRequestHandler):
+    _rid = 0
+    _ts = 0
     seen: list[tuple[str, str | None]] = []
     require_token: str | None = None
     e2e_key = "k" * 43
@@ -37,7 +39,9 @@ class FakeRelay(BaseHTTPRequestHandler):
     def _reply(self, code, payload):
         from phone_mcp.e2ee import seal
         try:
-            payload = {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload)}
+            payload = {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload,
+                          rid=self._rid, ts=self._ts),
+             "rid": self._rid, "ts": self._ts}
         except Exception:
             pass
         body = json.dumps(payload).encode()
@@ -58,6 +62,8 @@ class FakeRelay(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(n) if n else b""
         self._raw = json.loads(raw) if raw else {}
+        self._rid = int(self._raw.get("rid") or 0)
+        self._ts = int(self._raw.get("ts") or 0)
         FakeRelay.seen.append((self.path, self.headers.get("Authorization")))
         if FakeRelay.require_token is not None:
             if self.headers.get("Authorization") != f"Bearer {FakeRelay.require_token}":

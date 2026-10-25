@@ -114,7 +114,7 @@ class DeviceApi {
             // 诊断：main_timeouts 持续增长说明有无障碍调用卡主线程
             put("diag", svc.diagnostics())
             put("stopped", HumanOverride.isStopped())
-            put("stop_remaining_ms", HumanOverride.remainingMs())
+            put("stopped_for_ms", HumanOverride.lockedForMs())
             // 资金保护策略摘要：确认手机端装的是带 MoneyGuard 的版本
             put("money_guard", MoneyGuard.policySummary())
         }
@@ -123,7 +123,7 @@ class DeviceApi {
     /** 人工操作状态查询。没有"恢复"操作——用户停手后自然放行。 */
     fun overrideStatus(): JSONObject = JSONObject().apply {
         put("stopped", HumanOverride.isStopped())
-        put("stop_remaining_ms", HumanOverride.remainingMs())
+        put("stopped_for_ms", HumanOverride.lockedForMs())
         put("blocked_count", HumanOverride.blockedCount())
     }
 
@@ -146,6 +146,8 @@ class DeviceApi {
 
     fun windows(): JSONObject {
         val svc = requireService()
+        // 窗口列表会暴露前台包名与标题，资金类 App 上同样要拒
+        svc.callOnMain(timeoutMs = 5_000) { MoneyGuard.enforceRead(svc) }
         return JSONObject().put("windows", svc.callOnMain { svc.listWindows() })
     }
 
@@ -304,6 +306,7 @@ class DeviceApi {
 
     fun waitIdle(body: JSONObject): JSONObject {
         val svc = requireService()
+        svc.callOnMain(timeoutMs = 5_000) { MoneyGuard.enforceRead(svc) }
         val timeout = body.optLong("timeout_ms", 5000)
         val quiet = body.optLong("quiet_ms", 400)
         return JSONObject().put("stable", svc.waitForIdle(timeout, quiet))
@@ -318,8 +321,10 @@ class DeviceApi {
      * 这是「监听」而非「轮询」的关键——模型不需要反复调用 observe。
      */
     fun watch(body: JSONObject): JSONObject {
-        requireService()
+        val svc = requireService()
         HumanOverride.check()
+        // 事件内容会进模型上下文，资金类 App 上必须拒
+        svc.callOnMain(timeoutMs = 5_000) { MoneyGuard.enforceRead(svc) }
         val timeout = body.optLong("timeout_ms", 30_000).coerceIn(500, 120_000)
         val since = body.optLong("since_id", EventBus.currentId())
         val pkg = body.optString("package").ifBlank { null }
@@ -364,6 +369,8 @@ class DeviceApi {
     fun waitUntil(body: JSONObject): JSONObject {
         val svc = requireService()
         HumanOverride.check()
+        // wait_until 能当"屏幕上有没有这段字"的探针用，资金页上要拒
+        svc.callOnMain(timeoutMs = 5_000) { MoneyGuard.enforceRead(svc) }
         val text = body.optString("text").ifBlank { null }
             ?: throw IllegalArgumentException("需要 text")
         val disappear = body.optBoolean("disappear", false)

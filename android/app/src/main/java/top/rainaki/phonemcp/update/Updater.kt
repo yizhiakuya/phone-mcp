@@ -236,12 +236,20 @@ class Updater(private val activity: Activity) {
             conn.disconnect()
         }
 
-        if (release.md5.isNotBlank()) {
-            val actual = md5Of(target)
-            if (!actual.equals(release.md5, ignoreCase = true)) {
-                target.delete()
-                throw IllegalStateException("校验失败：MD5 不匹配（期望 ${release.md5}，实际 $actual）")
-            }
+        // 校验必须做，不能"没有 md5 就跳过"。
+        // 缺失 md5 说明 release 元数据不完整或被篡改——宁可拒绝，也不要装一个
+        // 未经校验的包。真正防篡改的是签名（同签名才能覆盖安装），
+        // 但这里多一道完整性检查能挡住下载中断和中间人替换。
+        if (release.md5.isBlank()) {
+            target.delete()
+            throw IllegalStateException(
+                "更新包缺少校验信息（release 说明里没有 md5），已拒绝安装。"
+            )
+        }
+        val actual = md5Of(target)
+        if (!actual.equals(release.md5, ignoreCase = true)) {
+            target.delete()
+            throw IllegalStateException("校验失败：MD5 不匹配（期望 ${release.md5}，实际 $actual）")
         }
         return DownloadResult(target, reused = false)
     }
@@ -293,11 +301,10 @@ class Updater(private val activity: Activity) {
     private fun isUsable(file: File, release: Release): Boolean {
         if (!file.exists() || file.length() == 0L) return false
         if (release.sizeBytes > 0 && file.length() != release.sizeBytes) return false
-        if (release.md5.isNotBlank()) {
-            return runCatching { md5Of(file).equals(release.md5, ignoreCase = true) }
-                .getOrDefault(false)
-        }
-        return true
+        // 没有 md5 就认为不可复用——必须重新下载并校验
+        if (release.md5.isBlank()) return false
+        return runCatching { md5Of(file).equals(release.md5, ignoreCase = true) }
+            .getOrDefault(false)
     }
 
     private fun httpGetText(url: String): String {

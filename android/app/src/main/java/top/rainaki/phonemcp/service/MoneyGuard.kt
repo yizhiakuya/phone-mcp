@@ -159,6 +159,26 @@ object MoneyGuard {
         "pay", "payment", "paypal", "transfer", "remit", "recharge", "withdraw",
         "checkout", "settle", "settlement", "buy", "purchase", "topup",
         "wallet", "balance", "bankcard", "creditcard",
+        // 电商/订阅类结账流程（海外站点常见）
+        "order", "orders", "subscribe", "subscription", "donate", "donation",
+        "billing", "invoice", "cart", "coupon", "refund", "deposit",
+        "stripe", "braintree", "adyen", "worldpay",
+    )
+
+    /**
+     * 目标链的英文短语（整句包含匹配，非切词）。
+     *
+     * 用于按钮文字是英文的场景——Chrome 里打开的海外结账页通常没有中文，
+     * 也没有资源 id 可查。
+     */
+    private val MONEY_TEXT_EN = listOf(
+        "place order", "place your order", "complete purchase", "complete order",
+        "confirm payment", "confirm purchase", "pay now", "buy now", "checkout",
+        "add to cart", "proceed to checkout", "proceed to payment",
+        "subscribe now", "start subscription", "donate now", "make a donation",
+        "confirm transfer", "send money", "transfer now", "top up",
+        "billing information", "payment method", "card number", "cvv", "cvc",
+        "expiry date", "security code", "one-time password", "verification code",
     )
 
     /** 整屏扫描的节点上限，防止超大页面拖慢主线程。 */
@@ -196,7 +216,12 @@ object MoneyGuard {
         if (keyAction != null && keyAction.lowercase() in ALWAYS_ALLOWED_KEYS) return
 
         // 闸 1：整包（只读也拦——资金类 App 界面本身就是敏感数据）
-        checkPackage(svc.currentPackage())
+        //
+        // 检查**所有可见窗口**而不只是活动窗口：手势是全局下发的，
+        // 分屏/小窗里的资金类 App 同样可能被点到。
+        for (pkg in visibleWindowPackages(svc)) {
+            checkPackage(pkg)
+        }
 
         // 闸 3：整屏（只读浏览跳过）
         if (readOnly) return
@@ -236,7 +261,39 @@ object MoneyGuard {
      * 连读都读不了，把日常使用堵死。整屏判定只用于动作。
      */
     fun enforceRead(svc: PhoneMcpService) {
-        checkPackage(svc.currentPackage())
+        for (pkg in visibleWindowPackages(svc)) {
+            checkPackage(pkg)
+        }
+    }
+
+    /**
+     * 所有可见窗口的包名。
+     *
+     * 手势是**全局下发**的（`dispatchGesture` 不认窗口），所以分屏/小窗里的
+     * 资金类 App 同样可能被点到。只看活动窗口的包名会漏掉这种情况。
+     */
+    private fun visibleWindowPackages(svc: PhoneMcpService): Set<String> {
+        val out = HashSet<String>()
+        runCatching {
+            for (w in svc.windows) {
+                val pkg = w.root?.packageName?.toString()
+                if (!pkg.isNullOrBlank()) out.add(pkg)
+            }
+        }
+        // 活动窗口的包名一定要包含（windows 在某些 ROM 上可能返回空）
+        svc.currentPackage()?.let { out.add(it) }
+        return out
+    }
+
+    /**
+     * 这个包名是否属于资金类 App（不做抛异常，只回答是/否）。
+     *
+     * EventBus 用它过滤事件——银行 App 的界面文字不该进模型上下文。
+     */
+    fun isMoneyPackage(pkg: String): Boolean {
+        if (pkg in BLOCKED_PACKAGES) return true
+        val label = labelOf(pkg) ?: return false
+        return LABEL_KEYWORDS.any { label.contains(it, ignoreCase = true) }
     }
 
     /** 启动 App 前的检查。被禁的包连启动都不允许。 */
@@ -332,6 +389,9 @@ object MoneyGuard {
             if (f.isNullOrBlank()) continue
             val hit = TARGET_KEYWORDS.firstOrNull { f.contains(it) }
             if (hit != null) return hit
+            val lower = f.lowercase()
+            val en = MONEY_TEXT_EN.firstOrNull { lower.contains(it) }
+            if (en != null) return en
             val tokens = idTokens(f) intersect MONEY_ID_TOKENS
             if (tokens.isNotEmpty()) return tokens.joinToString(",")
         }

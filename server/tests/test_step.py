@@ -14,6 +14,8 @@ import pytest
 
 
 class StepBridge(BaseHTTPRequestHandler):
+    _rid = 0
+    _ts = 0
     e2e_key = ""
     device_id = "phone-test"
     seen: list[tuple[str, dict]] = []
@@ -26,7 +28,9 @@ class StepBridge(BaseHTTPRequestHandler):
     def _reply(self, code, payload):
         from phone_mcp.e2ee import seal
         body = json.dumps(
-            {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload)}
+            {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload,
+                          rid=self._rid, ts=self._ts),
+             "rid": self._rid, "ts": self._ts}
         ).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -39,7 +43,8 @@ class StepBridge(BaseHTTPRequestHandler):
         raw = json.loads(self.rfile.read(n)) if n else {}
         from phone_mcp.e2ee import open_sealed
 
-        payload = open_sealed(self.e2e_key, self.device_id, self._path_only(), raw["e2ee"])
+        payload = open_sealed(self.e2e_key, self.device_id, self._path_only(), raw["e2ee"],
+                                rid=int(raw.get("rid") or 0), ts=int(raw.get("ts") or 0))
         StepBridge.seen.append((self._path_only(), payload))
         if self._path_only() == "/screenshot":
             # 截图走二进制密封，这里只回一个极小的 JPEG 占位

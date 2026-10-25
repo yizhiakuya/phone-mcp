@@ -8,6 +8,19 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 object PairingClient {
+    /**
+     * 从二维码里解析出中继地址，**不做任何网络请求**。
+     *
+     * 用于配对前的确认弹窗：用户必须看到自己要连的是哪个中继，
+     * 扫到恶意二维码时才有机会取消。
+     */
+    fun peekOrigin(qr: String): String? = runCatching {
+        require(qr.length <= 4096)
+        val data = JSONObject(qr)
+        require(data.optString("type") == "phone-mcp-pair" && data.optInt("version") == 1)
+        ConnectionSecurity.httpsOrigin(data.getString("relay_url"))
+    }.getOrNull()
+
     fun pair(qr: String, prefs: Prefs) {
         require(qr.length <= 4096) { "无效的配对二维码" }
         val data = JSONObject(qr)

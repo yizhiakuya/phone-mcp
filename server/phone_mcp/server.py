@@ -722,8 +722,9 @@ async def phone_status() -> str:
         # 中继模式下 /health 是手机的，中继自身的设备列表另查
         data = await client.get("/health")
         screen = data.get("screen") or {}
-        mode = "中继" if cfg.mode == "relay" else "局域网直连"
-        target = cfg.device_id if cfg.mode == "relay" else cfg.host
+        # 局域网直连已移除，只有中继模式
+        mode = "中继"
+        target = cfg.device_id
         text = (
             f"连接正常 ✓（{mode} → {target}）\n"
             f"设备：{data.get('device')}  Android {data.get('sdk')}\n"

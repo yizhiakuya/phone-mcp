@@ -14,11 +14,9 @@ class PairingCaptureActivity : CaptureActivity() {
 
     override fun onResume() {
         super.onResume()
-        (application as PhoneMcpApp).settingsVisible = true
     }
 
     override fun onPause() {
-        (application as PhoneMcpApp).settingsVisible = false
         super.onPause()
     }
 }

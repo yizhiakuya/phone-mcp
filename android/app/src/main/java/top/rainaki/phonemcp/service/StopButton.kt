@@ -46,7 +46,7 @@ import android.widget.TextView
 class StopButton(private val context: Context) {
 
     /** 状态条当前在服务哪种场景。 */
-    enum class Mode { NONE, ACTION, CONNECTION }
+    enum class Mode { NONE, ACTION, CONNECTION, LOCKED }
 
     companion object {
         private const val TAG = "StopButton"
@@ -131,7 +131,7 @@ class StopButton(private val context: Context) {
             Log.w(TAG, "no overlay permission")
             return
         }
-        // 已中断：不要再把条显示出来（AI 可能还在重试调用）
+        // 已锁定：条已经在显示"恢复"按钮，不要被动作调用改回动作模式
         if (HumanOverride.isStopped()) return
         // 正在显示断开提示时不要被动作顶掉——断开比"AI 在操作"更需要用户知道
         if (mode == Mode.CONNECTION && visible) return
@@ -209,7 +209,7 @@ class StopButton(private val context: Context) {
     }
 
     fun hideSoon() {
-        handler.post { if (mode == Mode.ACTION) scheduleHide() }
+        handler.post { if (mode == Mode.ACTION) scheduleHide() }  // 锁定/连接模式不自动隐藏
     }
 
     fun hide() {
@@ -270,6 +270,10 @@ class StopButton(private val context: Context) {
             renderConnection()
             return
         }
+        if (mode == Mode.LOCKED) {
+            renderLocked()
+            return
+        }
         val current = steps.lastOrNull()
         pillDot?.background = dot(Color.parseColor("#FF3B30"))
         pillLabel?.text = if (current == null) {
@@ -301,6 +305,28 @@ class StopButton(private val context: Context) {
             setColor(Color.parseColor("#FF3B30"))
         }
         hintText?.text = "点下方按钮立即中断，把控制权交还给你"
+    }
+
+    /**
+     * 锁定状态：显示已中断，按钮变「恢复」。
+     *
+     * 条**不会自动消失**——这是用户夺回控制权后的确认，也是唯一的解锁入口。
+     */
+    private fun renderLocked() {
+        pillDot?.background = dot(Color.parseColor("#FF9500"))
+        pillLabel?.text = "已中断 · 点此恢复 ▾"
+        headerText?.text = "AI 操作已停止"
+        statusText?.text = "控制权已交还给你。AI 的任何操作都会被拒绝，直到你点「恢复」。"
+        val sec = HumanOverride.lockedForMs() / 1000
+        val dur = if (sec < 60) "${sec} 秒" else "${sec / 60} 分钟"
+        stepsText?.text = "已锁定 $dur"
+        stepsText?.visibility = View.VISIBLE
+        actionButton?.text = "恢复（允许 AI 继续）"
+        actionButton?.background = GradientDrawable().apply {
+            cornerRadius = dp(12).toFloat()
+            setColor(Color.parseColor("#0A84FF"))
+        }
+        hintText?.text = "不点恢复的话，AI 会一直被你挡在外面"
     }
 
     private fun renderConnection() {
@@ -487,12 +513,14 @@ class StopButton(private val context: Context) {
                 setColor(Color.parseColor("#FF3B30"))
             }
             setOnClickListener {
-                // 两种模式下按钮语义不同：动作模式=中断，连接模式=重连
-                if (mode == Mode.CONNECTION) {
-                    onReconnect?.invoke()
-                    statusText?.text = "正在重连…"
-                } else {
-                    requestStop()
+                // 三种模式下按钮语义不同
+                when (mode) {
+                    Mode.CONNECTION -> {
+                        onReconnect?.invoke()
+                        statusText?.text = "正在重连…"
+                    }
+                    Mode.LOCKED -> requestResume()
+                    else -> requestStop()
                 }
                 Unit
             }
@@ -598,15 +626,28 @@ class StopButton(private val context: Context) {
         }, ANIM_MS / 2)
     }
 
+    /**
+     * 用户点了「停止操作」。
+     *
+     * 中断是**锁**不是冷却：锁定后条**不消失**，改为显示「恢复」按钮。
+     * 早期版本 10 秒后自动放行，被注入的模型等一会儿重试就能继续操作，
+     * 中断形同虚设。现在必须用户手动恢复。
+     */
     private fun requestStop() {
         HumanOverride.requestStop()
-        statusText?.text = "已停止，控制权已交还"
+        mode = Mode.LOCKED
+        render()
+        hideRunnable?.let { handler.removeCallbacks(it) }
+    }
+
+    /** 用户点了「恢复」，解除锁定。 */
+    private fun requestResume() {
+        HumanOverride.resume()
+        mode = Mode.ACTION
+        statusText?.text = "已恢复，AI 可以继续操作"
         stepsText?.visibility = View.GONE
-        // 立即收起并隐藏：中断后条不该继续挂在屏幕上
-        handler.postDelayed({
-            collapse(animate = false)
-            hide()
-        }, 400)
+        render()
+        scheduleHide()
     }
 
     private fun dp(v: Int): Int =

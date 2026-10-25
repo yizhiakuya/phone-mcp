@@ -74,6 +74,12 @@ class MainActivity : android.app.Activity() {
         btnOverlayPerm = findViewById(R.id.btnOverlayPerm)
         statusOverride = findViewById(R.id.statusOverride)
         btnResume = findViewById(R.id.btnResume)
+        btnResume.setOnClickListener {
+            HumanOverride.resume()
+            // 清掉渲染缓存，否则状态没变化时 renderStatus 会直接 return
+            lastRenderKey = null
+            renderStatus()
+        }
 
         pairingButton.setOnClickListener {
             if (!pairing) IntentIntegrator(this)
@@ -113,14 +119,12 @@ class MainActivity : android.app.Activity() {
 
     override fun onResume() {
         super.onResume()
-        app.settingsVisible = true
         // 无障碍开关可能是刚从设置页回来改的，重新拉一次状态
         renderStatus()
         handler.post(refresh)
     }
 
     override fun onPause() {
-        app.settingsVisible = false
         handler.removeCallbacks(refresh)
         super.onPause()
     }
@@ -134,6 +138,33 @@ class MainActivity : android.app.Activity() {
         }
         val qr = result.contents ?: return
         if (pairing) return
+
+        // 配对前必须让用户确认中继地址。
+        //
+        // 二维码里带着中继地址和端到端密钥——扫到恶意二维码就等于把手机的
+        // 无障碍控制权交给对方。用户至少要知道自己在连哪台服务器。
+        val origin = PairingClient.peekOrigin(qr)
+        if (origin == null) {
+            toast("这不是 Phone MCP 的配对二维码")
+            return
+        }
+        val alreadyPaired = app.prefs.relayConfigured
+        val warn = if (alreadyPaired) {
+            "\n\n⚠ 本机已配对（${app.prefs.relayUrl}），继续将覆盖现有配对。"
+        } else ""
+        android.app.AlertDialog.Builder(this)
+            .setTitle("确认配对")
+            .setMessage(
+                "即将连接到中继：\n\n$origin\n\n" +
+                "这台服务器将能向你的手机发送操作指令（内容端到端加密，它看不到）。" +
+                "只有在你信任这台电脑和这台服务器时才继续。" + warn
+            )
+            .setPositiveButton("连接") { _, _ -> doPair(qr) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun doPair(qr: String) {
         pairing = true
         pairingButton.isEnabled = false
         pairingButton.text = "正在配对…"
@@ -227,18 +258,20 @@ class MainActivity : android.app.Activity() {
         statusStopBtn.text = when {
             !hasOverlay -> "中断条：未授权 ✗（AI 操作时无法显示，请点下方按钮授权）"
             HumanOverride.isStopped() ->
-                "中断条：已中断（${HumanOverride.remainingMs() / 1000 + 1} 秒后放行）"
+                "中断条：已锁定（需在手机上点「恢复」才能继续）"
             sb?.currentStep != null ->
                 "AI 正在操作（第 ${sb.stepCount} 步）：${sb.currentStep}"
             else -> "中断条：就绪 ✓（AI 操作时出现在屏幕底部，点一下即中断）"
         }
         statusStopBtn.setTextColor(getColor(if (hasOverlay) R.color.ok else R.color.warn))
 
+        // 中断是锁：锁定时必须给出本地解锁入口，否则用户只能重装 App。
         val stopped = HumanOverride.isStopped()
         statusOverride.visibility = if (stopped) android.view.View.VISIBLE else android.view.View.GONE
-        btnResume.visibility = android.view.View.GONE
+        btnResume.visibility = if (stopped) android.view.View.VISIBLE else android.view.View.GONE
         if (stopped) {
-            statusOverride.text = "⏸ 你已中断自动操作（${HumanOverride.remainingMs() / 1000 + 1} 秒后放行）"
+            val sec = HumanOverride.lockedForMs() / 1000
+            statusOverride.text = "⏸ AI 操作已锁定 ${sec} 秒。点下方「恢复」才会放行。"
         }
 
         deviceIdText.text = if (app.prefs.relayConfigured)

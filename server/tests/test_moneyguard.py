@@ -79,6 +79,8 @@ def test_policy_tables_are_not_empty():
 
 
 class GuardBridge(BaseHTTPRequestHandler):
+    _rid = 0
+    _ts = 0
     """假手机：解出请求体后按需回 403 money_blocked。"""
 
     e2e_key = ""
@@ -94,7 +96,9 @@ class GuardBridge(BaseHTTPRequestHandler):
     def _reply(self, code, payload):
         from phone_mcp.e2ee import seal
         body = json.dumps(
-            {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload)}
+            {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload,
+                          rid=self._rid, ts=self._ts),
+             "rid": self._rid, "ts": self._ts}
         ).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -105,9 +109,12 @@ class GuardBridge(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         raw = json.loads(self.rfile.read(n)) if n else {}
+        self._rid = int(raw.get("rid") or 0)
+        self._ts = int(raw.get("ts") or 0)
         from phone_mcp.e2ee import open_sealed
 
-        payload = open_sealed(self.e2e_key, self.device_id, self._path_only(), raw["e2ee"])
+        payload = open_sealed(self.e2e_key, self.device_id, self._path_only(), raw["e2ee"],
+                                rid=int(raw.get("rid") or 0), ts=int(raw.get("ts") or 0))
         GuardBridge.seen.append((self._path_only(), payload))
         if GuardBridge.block:
             return self._reply(403, {

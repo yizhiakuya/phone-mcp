@@ -13,6 +13,8 @@ from phone_mcp.config import Config
 
 
 class OverrideBridge(BaseHTTPRequestHandler):
+    _rid = 0
+    _ts = 0
     paused = False
     seen: list[tuple[str, dict]] = []
     e2e_key = ""
@@ -25,11 +27,14 @@ class OverrideBridge(BaseHTTPRequestHandler):
 
     def _unseal(self, body):
         from phone_mcp.e2ee import open_sealed
-        return open_sealed(self.e2e_key, self.device_id, self._path_only(), body["e2ee"])
+        return open_sealed(self.e2e_key, self.device_id, self._path_only(), body["e2ee"],
+                            rid=int(body.get("rid") or 0), ts=int(body.get("ts") or 0))
 
     def _reply(self, code, payload):
         from phone_mcp.e2ee import seal
-        payload = {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload)}
+        payload = {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload,
+                          rid=self._rid, ts=self._ts),
+             "rid": self._rid, "ts": self._ts}
         body = json.dumps(payload).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -52,6 +57,8 @@ class OverrideBridge(BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self._read()
         path = self.path.rstrip("/")
+        self._rid = int(raw.get("rid") or 0)
+        self._ts = int(raw.get("ts") or 0)
         try:
             body = self._unseal(raw)
         except Exception:

@@ -5,19 +5,53 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+# 中继不需要 root：它只监听 127.0.0.1 高位端口、读写自己的状态目录。
+# 用固定的系统用户（无登录 shell），配合下面的沙箱指令，权限远小于 root。
+# 注：DynamicUser=yes 无法与 Group= 组合（systemd 报 217/USER），
+# 而 relay.env 需要固定组才能 0640，所以这里用固定用户。
+User=phonemcp-relay
+Group=phonemcp-relay
 WorkingDirectory=/opt/phonemcp-relay
 EnvironmentFile=/opt/phonemcp-relay/relay.env
 ExecStart=/usr/bin/python3 /opt/phonemcp-relay/relay.py
 Restart=always
 RestartSec=3
+
+# ---- 沙箱 ----
 NoNewPrivileges=yes
 PrivateTmp=yes
-StateDirectory=phonemcp-relay
-StateDirectoryMode=0700
-UMask=0077
+PrivateDevices=yes
 ProtectSystem=strict
 ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# 只允许 IPv4/IPv6 与 Unix socket：中继不做别的网络操作
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# 只保留必需的系统调用组
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+SystemCallArchitectures=native
+
+# 能力全部丢弃——中继不需要任何 capability
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+StateDirectory=phonemcp-relay
+StateDirectoryMode=0700
+LogsDirectory=phonemcp-relay
+LogsDirectoryMode=0700
+UMask=0077
 ReadWritePaths=/var/log/phonemcp-relay
 
 [Install]

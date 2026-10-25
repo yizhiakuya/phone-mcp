@@ -10,6 +10,8 @@ import pytest
 
 
 class EventBridge(BaseHTTPRequestHandler):
+    _rid = 0
+    _ts = 0
     """假手机：按预设脚本返回 watch / wait_until 的结果。"""
 
     e2e_key = ""
@@ -26,7 +28,9 @@ class EventBridge(BaseHTTPRequestHandler):
     def _reply(self, code, payload):
         from phone_mcp.e2ee import seal
         body = json.dumps(
-            {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload)}
+            {"e2ee": seal(self.e2e_key, self.device_id, self._path_only(), payload,
+                          rid=self._rid, ts=self._ts),
+             "rid": self._rid, "ts": self._ts}
         ).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -40,7 +44,10 @@ class EventBridge(BaseHTTPRequestHandler):
         from phone_mcp.e2ee import open_sealed
 
         path = self._path_only()
-        payload = open_sealed(self.e2e_key, self.device_id, path, raw["e2ee"])
+        self._rid = int(raw.get("rid") or 0)
+        self._ts = int(raw.get("ts") or 0)
+        payload = open_sealed(self.e2e_key, self.device_id, path, raw["e2ee"],
+                                rid=int(raw.get("rid") or 0), ts=int(raw.get("ts") or 0))
         EventBridge.seen.append((path, payload))
 
         if path == "/watch":

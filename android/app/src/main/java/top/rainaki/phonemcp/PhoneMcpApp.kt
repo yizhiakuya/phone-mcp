@@ -28,9 +28,6 @@ class PhoneMcpApp : Application() {
         private set
 
     @Volatile
-    var settingsVisible = false
-
-    @Volatile
     private var tunnel: TunnelClient? = null
 
     /** 顶部中断条（AI 操作时显示，用户点一下即中断）。 */

@@ -702,7 +702,7 @@ class PhoneMcpService : AccessibilityService() {
         put("root_available", rootInActiveWindow != null)
         put("service_connected_at", connectedAtMs)
         put("stopped", HumanOverride.isStopped())
-        put("stop_remaining_ms", HumanOverride.remainingMs())
+        put("stopped_for_ms", HumanOverride.lockedForMs())
         put("action_running", HumanOverride.actionRunning)
         put("recent_events", org.json.JSONArray(recentEvents.toList()))
         put("recent_timing", org.json.JSONArray(recentTiming.toList()))
@@ -759,7 +759,7 @@ class PhoneMcpService : AccessibilityService() {
         // 手势执行期间用户可能点了中断条 —— 此时结果作废，立刻中断
         if (HumanOverride.isStopped()) {
             Log.i(TAG, "user stopped during gesture, aborting")
-            throw UserOperatingException(HumanOverride.remainingMs())
+            throw UserOperatingException(HumanOverride.lockedForMs())
         }
         return success.get()
     }

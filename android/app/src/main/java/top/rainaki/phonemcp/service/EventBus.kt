@@ -128,15 +128,72 @@ object EventBus {
         return true
     }
 
-    /** 把 AccessibilityEvent 转成缓冲条目。 */
+    /**
+     * 把 AccessibilityEvent 转成缓冲条目。
+     *
+     * ## 为什么在这里过滤
+     *
+     * 事件是**被动收进来的**：不管模型调不调 `phone_watch`，`onAccessibilityEvent`
+     * 都会把系统里发生的事记进缓冲。等到 `phone_watch` 才拦就晚了——缓冲里
+     * 已经有银行 App 的余额、短信验证码、密码管理器的主密码了。
+     *
+     * 所以在入口就丢掉三类内容：
+     *   * 资金类 App 的事件（包名判定，与 MoneyGuard 同源）
+     *   * 密码框内容（`isPassword`）
+     *   * 短信 / 验证器 / 密码管理器 / 系统设置
+     */
     fun recordFrom(event: AccessibilityEvent) {
         val type = typeName(event.eventType) ?: return
-        val text = runCatching {
-            event.text?.joinToString(" ")?.trim()?.ifBlank { null }
-                ?: event.contentDescription?.toString()
-        }.getOrNull()
-        record(type, event.packageName?.toString(), text)
+        val pkg = event.packageName?.toString()
+
+        // 资金类与敏感 App：整条丢弃，连包名都不记
+        if (pkg != null && isSensitivePackage(pkg)) return
+
+        // 密码框：内容不能进缓冲
+        val isPasswordField = runCatching { event.isPassword }.getOrDefault(false)
+
+        val text = if (isPasswordField) {
+            "[密码字段已隐藏]"
+        } else {
+            runCatching {
+                event.text?.joinToString(" ")?.trim()?.ifBlank { null }
+                    ?: event.contentDescription?.toString()
+            }.getOrNull()
+        }
+        record(type, pkg, text)
     }
+
+    /**
+     * 敏感 App 名单：这些 App 的事件一律不记。
+     *
+     * 与 MoneyGuard 的禁用包名同源，另外加上短信、验证器、密码管理器、
+     * 系统设置——它们承载的是验证码、TOTP、主密码，同样不该进模型上下文。
+     */
+    private fun isSensitivePackage(pkg: String): Boolean {
+        if (pkg in SENSITIVE_PACKAGES) return true
+        // 资金类 App 用 MoneyGuard 的判定（包名表 + 应用名关键词）
+        return runCatching { MoneyGuard.isMoneyPackage(pkg) }.getOrDefault(false)
+    }
+
+    /** 短信、验证器、密码管理器、系统设置。 */
+    private val SENSITIVE_PACKAGES = setOf(
+        "com.android.mms",                      // 系统短信
+        "com.google.android.apps.messaging",    // Google 短信
+        "com.miui.smsextra",                    // MIUI 短信增强
+        "com.android.settings",                 // 系统设置
+        "com.android.vending",                  // Play 商店
+        "com.xiaomi.market",                    // 小米商店
+        "com.authy.authy",                      // Authy
+        "com.google.android.apps.authenticator2", // Google 验证器
+        "com.microsoft.authenticator",          // Microsoft 验证器
+        "com.bitwarden.authenticator",          // Bitwarden 验证器
+        "com.x8bit.bitwarden",                  // Bitwarden
+        "com.onepassword.android",              // 1Password
+        "com.agilebits.onepassword",            // 1Password 旧包名
+        "com.lastpass.lpandroid",               // LastPass
+        "com.dashlane",                         // Dashlane
+        "com.keepassdroid",                     // KeePass
+    )
 
     private fun typeName(type: Int): String? = when (type) {
         AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> "notification"

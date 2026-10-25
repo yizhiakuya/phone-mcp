@@ -35,11 +35,33 @@ object E2ee {
         return raw
     }
 
-    private fun aad(deviceId: String, path: String): ByteArray =
-        "$deviceId\n$path".toByteArray(Charsets.UTF_8)
+    /**
+     * AAD：设备 + 路径 + 请求号 + 时间戳。
+     *
+     * rid/ts 是**重放防护**：只绑 device+path 时，中继（不可信节点）可以把
+     * 抓到的任意一条 `/click` 密文原样再发一次——AAD 完全匹配，解密会成功，
+     * 动作会被执行。加入 rid（单调递增）和 ts（时间窗口）后：
+     *   * 旧 rid 被拒（见 ReplayGuard）
+     *   * 过期 ts 被拒
+     *   * 改 rid/ts → AAD 不匹配 → 解密失败
+     */
+    private fun aad(deviceId: String, path: String, rid: Long, ts: Long): ByteArray =
+        "$deviceId\n$path\n$rid\n$ts".toByteArray(Charsets.UTF_8)
 
-    /** 解密一个请求体。失败抛异常，绝不静默返回空对象。 */
-    fun open(key: String, deviceId: String, path: String, blob: String): JSONObject {
+    /**
+     * 解密一个请求体。失败抛异常，绝不静默返回空对象。
+     *
+     * @param rid 请求号（单调递增），由电脑端生成
+     * @param ts Unix 秒，由电脑端生成
+     */
+    fun open(
+        key: String,
+        deviceId: String,
+        path: String,
+        blob: String,
+        rid: Long = 0,
+        ts: Long = 0,
+    ): JSONObject {
         val padded = blob + "=".repeat((4 - blob.length % 4) % 4)
         val raw = Base64.decode(padded, Base64.URL_SAFE or Base64.NO_WRAP)
         require(raw.size > NONCE_BYTES) { "密文长度不足" }
@@ -53,13 +75,20 @@ object E2ee {
             SecretKeySpec(decodeKey(key), "AES"),
             GCMParameterSpec(TAG_BITS, nonce),
         )
-        cipher.updateAAD(aad(deviceId, path))
+        cipher.updateAAD(aad(deviceId, path, rid, ts))
         val plain = cipher.doFinal(ct)
         return JSONObject(String(plain, Charsets.UTF_8))
     }
 
-    /** 加密响应体。 */
-    fun seal(key: String, deviceId: String, path: String, payload: JSONObject): String {
+    /** 加密响应体。rid/ts 原样回显，电脑端据此确认这是对本次请求的答复。 */
+    fun seal(
+        key: String,
+        deviceId: String,
+        path: String,
+        payload: JSONObject,
+        rid: Long = 0,
+        ts: Long = 0,
+    ): String {
         val nonce = ByteArray(NONCE_BYTES).also { random.nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(
@@ -67,13 +96,20 @@ object E2ee {
             SecretKeySpec(decodeKey(key), "AES"),
             GCMParameterSpec(TAG_BITS, nonce),
         )
-        cipher.updateAAD(aad(deviceId, path))
+        cipher.updateAAD(aad(deviceId, path, rid, ts))
         val ct = cipher.doFinal(payload.toString().toByteArray(Charsets.UTF_8))
         return Base64.encodeToString(nonce + ct, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
 
     /** 加密二进制（截图）。 */
-    fun sealBytes(key: String, deviceId: String, path: String, payload: ByteArray): String {
+    fun sealBytes(
+        key: String,
+        deviceId: String,
+        path: String,
+        payload: ByteArray,
+        rid: Long = 0,
+        ts: Long = 0,
+    ): String {
         val nonce = ByteArray(NONCE_BYTES).also { random.nextBytes(it) }
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(
@@ -81,7 +117,7 @@ object E2ee {
             SecretKeySpec(decodeKey(key), "AES"),
             GCMParameterSpec(TAG_BITS, nonce),
         )
-        cipher.updateAAD(aad(deviceId, path))
+        cipher.updateAAD(aad(deviceId, path, rid, ts))
         val ct = cipher.doFinal(payload)
         return Base64.encodeToString(nonce + ct, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
     }
